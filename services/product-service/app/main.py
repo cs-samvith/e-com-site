@@ -1,36 +1,60 @@
+from app.queue import queue_consumer
+from app.cache import cache
+from app.models import Product, ProductCreate, ProductUpdate, HealthResponse
+from app.config import settings
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from typing import List, Optional
 from uuid import UUID
 import logging
 from datetime import datetime
 from prometheus_client import Counter, Histogram, Gauge, generate_latest
-from fastapi.responses import Response
 
-# Import app modules
-from app.config import settings
-from app.models import Product, ProductCreate, ProductUpdate, HealthResponse
-
-# Try to import real database, fall back to mock
-try:
-    from app.database import db
-    USE_REAL_DB = True
-except Exception as e:
-    logger.warning(
-        f"Failed to initialize PostgreSQL: {e}. Using mock database.")
-    from app.mock_database import MockDatabase
-    db = MockDatabase()
-    USE_REAL_DB = False
-
-from app.cache import cache
-from app.queue import queue_consumer
-
-# Configure logging
+# Configure logging FIRST (before using logger)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Import app modules
+
+# Determine which database to use
+if settings.MOCK_MODE:
+    # Explicitly using mock mode
+    logger.info("MOCK_MODE=True: Using mock in-memory database")
+    from app.mock_database import MockDatabase
+    db = MockDatabase()
+    USE_REAL_DB = False
+elif settings.DB_HOST in ['postgres-service']:
+    # Kubernetes service name - use mock for local development
+    logger.info(f"DB_HOST={settings.DB_HOST}: Using mock in-memory database")
+    from app.mock_database import MockDatabase
+    db = MockDatabase()
+    USE_REAL_DB = False
+else:
+    # Try to use real database (localhost or custom host)
+    try:
+        logger.info(
+            f"Attempting to connect to PostgreSQL at {settings.DB_HOST}:{settings.DB_PORT}")
+        from app.database import db
+        # Test connection
+        if db.health_check():
+            logger.info("✓ Connected to PostgreSQL - using real database")
+            USE_REAL_DB = True
+        else:
+            logger.warning(
+                "PostgreSQL health check failed - using mock database")
+            from app.mock_database import MockDatabase
+            db = MockDatabase()
+            USE_REAL_DB = False
+    except Exception as e:
+        logger.warning(
+            f"Failed to initialize PostgreSQL: {e}. Using mock database.")
+        from app.mock_database import MockDatabase
+        db = MockDatabase()
+        USE_REAL_DB = False
+
 
 # Prometheus metrics
 REQUEST_COUNT = Counter(
@@ -91,6 +115,23 @@ async def shutdown_event():
     """Cleanup on shutdown"""
     logger.info("Shutting down...")
     queue_consumer.stop_consuming()
+
+
+@app.get("/")
+async def root():
+    """Root endpoint"""
+    return {
+        "service": settings.SERVICE_NAME,
+        "status": "running",
+        "version": "1.0.0",
+        "endpoints": {
+            "health": "/healthz",
+            "ready": "/ready",
+            "metrics": "/metrics",
+            "products": "/api/products",
+            "docs": "/docs"
+        }
+    }
 
 
 @app.get("/healthz", response_model=HealthResponse)
@@ -163,6 +204,28 @@ async def get_products(
         REQUEST_COUNT.labels(
             method="GET", endpoint="/api/products", status="500").inc()
         logger.error(f"Error getting products: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@app.get("/api/products/search/", response_model=List[Product])
+async def search_products(q: str = Query(..., min_length=1)):
+    """
+    Search products by name or description
+    IMPORTANT: This route must come BEFORE /api/products/{product_id}
+    """
+    try:
+        with REQUEST_LATENCY.labels(method="GET", endpoint="/api/products/search").time():
+            products = db.search_products(q)
+
+        REQUEST_COUNT.labels(
+            method="GET", endpoint="/api/products/search", status="200").inc()
+        logger.info(f"Search for '{q}' returned {len(products)} results")
+        return products
+
+    except Exception as e:
+        REQUEST_COUNT.labels(
+            method="GET", endpoint="/api/products/search", status="500").inc()
+        logger.error(f"Error searching products: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -301,27 +364,6 @@ async def delete_product(product_id: UUID):
         REQUEST_COUNT.labels(
             method="DELETE", endpoint="/api/products/{id}", status="500").inc()
         logger.error(f"Error deleting product {product_id}: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
-
-
-@app.get("/api/products/search/", response_model=List[Product])
-async def search_products(q: str = Query(..., min_length=1)):
-    """
-    Search products by name or description
-    """
-    try:
-        with REQUEST_LATENCY.labels(method="GET", endpoint="/api/products/search").time():
-            products = db.search_products(q)
-
-        REQUEST_COUNT.labels(
-            method="GET", endpoint="/api/products/search", status="200").inc()
-        logger.info(f"Search for '{q}' returned {len(products)} results")
-        return products
-
-    except Exception as e:
-        REQUEST_COUNT.labels(
-            method="GET", endpoint="/api/products/search", status="500").inc()
-        logger.error(f"Error searching products: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 

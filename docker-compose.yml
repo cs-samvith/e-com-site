@@ -1,37 +1,50 @@
 version: "3.8"
 
+# Run from: C:\mygit\e-com-site\
+# Start all: docker-compose up -d
+# Start infra only: docker-compose up -d postgres redis rabbitmq
+# Stop all: docker-compose down
+
 services:
-  # PostgreSQL Database
+  # PostgreSQL Database (shared by all services)
   postgres:
     image: postgres:15
     container_name: postgres-local
     environment:
-      POSTGRES_DB: products_db
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
+      # Multiple databases created via init script
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./infrastructure/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - microservices
 
-  # Redis Cache
+  # Redis Cache (shared)
   redis:
     image: redis:7-alpine
     container_name: redis-local
+    command: redis-server --appendonly yes
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 3s
       retries: 5
+    networks:
+      - microservices
 
-  # RabbitMQ
+  # RabbitMQ (shared)
   rabbitmq:
     image: rabbitmq:3-management
     container_name: rabbitmq-local
@@ -41,39 +54,39 @@ services:
     ports:
       - "5672:5672" # AMQP
       - "15672:15672" # Management UI
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - microservices
 
   # Product Service
   product-service:
-    build: .
+    build:
+      context: ./services/product-service
+      dockerfile: Dockerfile
     container_name: product-service
     environment:
-      # Service config
       SERVICE_NAME: product-service
       SERVICE_PORT: 8081
-
-      # Database
       DB_HOST: postgres
       DB_PORT: 5432
       DB_NAME: products_db
       DB_USER: postgres
       DB_PASSWORD: postgres
-
-      # Redis
       REDIS_HOST: redis
       REDIS_PORT: 6379
       CACHE_TTL: 300
-
-      # RabbitMQ
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_PORT: 5672
       RABBITMQ_USER: guest
       RABBITMQ_PASSWORD: guest
       RABBITMQ_QUEUE: inventory.updates
+      MOCK_MODE: "false"
     ports:
       - "8081:8081"
     depends_on:
@@ -96,6 +109,51 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+    networks:
+      - microservices
+
+  # User Service (uncomment when ready)
+  # user-service:
+  #   build:
+  #     context: ./services/user-service
+  #     dockerfile: Dockerfile
+  #   container_name: user-service
+  #   environment:
+  #     SERVICE_NAME: user-service
+  #     SERVICE_PORT: 8080
+  #     DB_HOST: postgres
+  #     DB_PORT: 5432
+  #     DB_NAME: users_db
+  #     DB_USER: postgres
+  #     DB_PASSWORD: postgres
+  #     REDIS_HOST: redis
+  #     REDIS_PORT: 6379
+  #     SESSION_TTL: 86400
+  #     RABBITMQ_HOST: rabbitmq
+  #     RABBITMQ_PORT: 5672
+  #     RABBITMQ_USER: guest
+  #     RABBITMQ_PASSWORD: guest
+  #     RABBITMQ_EXCHANGE: events
+  #     JWT_SECRET: your-secret-key-change-in-production
+  #     MOCK_MODE: "false"
+  #   ports:
+  #     - "8080:8080"
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     redis:
+  #       condition: service_healthy
+  #     rabbitmq:
+  #       condition: service_healthy
+  #   restart: unless-stopped
+  #   networks:
+  #     - microservices
 
 volumes:
   postgres_data:
+  redis_data:
+  rabbitmq_data:
+
+networks:
+  microservices:
+    driver: bridge

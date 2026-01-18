@@ -18,15 +18,32 @@ A simple microservice for product catalog and inventory management, designed to 
 The service gracefully handles missing dependencies and can run standalone:
 
 ```bash
-# 1. Install minimal dependencies
-pip install fastapi uvicorn pydantic pydantic-settings prometheus-client python-json-logger
+# 1. Create virtual environment (recommended)
+python -m venv venv
 
-# 2. Run the service (uses in-memory mock database)
+# 2. Activate virtual environment
+# Windows Command Prompt:
+venv\Scripts\activate.bat
+# Windows PowerShell:
+venv\Scripts\Activate.ps1
+# Linux/Mac:
+source venv/bin/activate
+
+# 3. Install dependencies
+pip install -r requirements.txt
+
+# 4. Run the service (uses in-memory mock database)
 python -m uvicorn app.main:app --reload --port 8081
 
-# 3. Test it
+# 5. Test it
 curl http://localhost:8081/api/products
+# Or open in browser: http://localhost:8081/api/products
 ```
+
+**Requirements:**
+
+- Python 3.11 or 3.12 (Python 3.13+ requires updated packages)
+- Use updated requirements.txt with pydantic 2.10.3
 
 **What happens:**
 
@@ -157,22 +174,26 @@ python -m uvicorn app.main:app --reload --port 8081
 | Method | Endpoint                       | Description                   | Example              |
 | ------ | ------------------------------ | ----------------------------- | -------------------- |
 | GET    | `/api/products`                | List all products (paginated) | `?limit=10&offset=0` |
+| GET    | `/api/products/search/`        | Search products               | `?q=laptop`          |
 | GET    | `/api/products/{id}`           | Get product by ID             | -                    |
 | POST   | `/api/products`                | Create new product            | See body below       |
 | PUT    | `/api/products/{id}`           | Update product                | See body below       |
 | DELETE | `/api/products/{id}`           | Delete product                | -                    |
-| GET    | `/api/products/search`         | Search products               | `?q=laptop`          |
 | GET    | `/api/products/{id}/inventory` | Get inventory count           | -                    |
+
+**Note:** Search endpoint must include trailing slash: `/api/products/search/`
 
 ### Health & Monitoring
 
-| Method | Endpoint                  | Description           |
-| ------ | ------------------------- | --------------------- |
-| GET    | `/healthz`                | Liveness probe (K8s)  |
-| GET    | `/ready`                  | Readiness probe (K8s) |
-| GET    | `/metrics`                | Prometheus metrics    |
-| GET    | `/debug/cache-stats`      | Cache statistics      |
-| POST   | `/debug/invalidate-cache` | Clear cache           |
+| Method | Endpoint                  | Description                          |
+| ------ | ------------------------- | ------------------------------------ |
+| GET    | `/`                       | Service info and available endpoints |
+| GET    | `/healthz`                | Liveness probe (K8s)                 |
+| GET    | `/ready`                  | Readiness probe (K8s)                |
+| GET    | `/metrics`                | Prometheus metrics                   |
+| GET    | `/docs`                   | Interactive API documentation        |
+| GET    | `/debug/cache-stats`      | Cache statistics                     |
+| POST   | `/debug/invalidate-cache` | Clear cache                          |
 
 ---
 
@@ -227,7 +248,11 @@ curl -X DELETE http://localhost:8081/api/products/$PRODUCT_ID
 ### Search Products
 
 ```bash
-curl "http://localhost:8081/api/products/search?q=laptop"
+# Note: Include trailing slash
+curl "http://localhost:8081/api/products/search/?q=laptop"
+
+# Or in browser
+http://localhost:8081/api/products/search/?q=laptop
 ```
 
 ### Health Check
@@ -543,38 +568,59 @@ Watch the service logs to see it process the message!
 
 ### Service won't start
 
-**Check dependencies:**
+**Issue: Port already in use**
 
 ```bash
-# Test PostgreSQL
-docker exec postgres-local psql -U postgres -c "SELECT 1"
+# Find process using port 8081
+netstat -ano | findstr :8081
 
-# Test Redis
-docker exec redis-local redis-cli ping
+# Kill the process (Windows)
+taskkill /PID <PID> /F
 
-# Test RabbitMQ
-docker exec rabbitmq-local rabbitmq-diagnostics ping
+# Or use different port
+python -m uvicorn app.main:app --reload --port 8082
 ```
 
-**Check logs:**
+**Issue: Import errors or module not found**
 
 ```bash
-# Docker Compose
-docker-compose logs product-service
+# Make sure venv is activated (should see (venv) in prompt)
+venv\Scripts\activate.bat
 
-# Docker container
-docker logs product-service
+# Verify you're in the right directory
+cd C:\path\to\product-service
+dir app  # Should show app folder with Python files
+
+# Reinstall dependencies
+pip install -r requirements.txt
 ```
 
-### Database connection errors
+**Issue: Python version too new (3.13+)**
 
 ```bash
-# Restart PostgreSQL
-docker restart postgres-local
+# Check Python version
+python --version
 
-# Or use mock mode
-python -m uvicorn app.main:app --port 8081
-# (automatically uses in-memory database)
+# If 3.13+, use Python 3.11 or 3.12:
+py -3.11 -m venv venv
+# or
+conda create -n product-service python=3.11
+```
+
+### Search endpoint returns UUID error
+
+**Issue:** `/api/products/search` tries to parse "search" as UUID
+
+**Solution:** Make sure search route is defined BEFORE the `{product_id}` route in `app/main.py`. The corrected file has this fixed.
+
+Also, use the trailing slash:
+
+```bash
+# Correct
+curl "http://localhost:8081/api/products/search/?q=laptop"
+
+# Also works
+curl "http://localhost:8081/api/products/search?q=laptop"
 ```
 
 ### Port already in use
