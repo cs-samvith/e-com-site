@@ -208,14 +208,18 @@ async def get_products(
 
 
 @app.get("/api/products/search/", response_model=List[Product])
-async def search_products(q: str = Query(..., min_length=1)):
+async def search_products(q: str = Query(default="", min_length=0)):
     """
     Search products by name or description
     IMPORTANT: This route must come BEFORE /api/products/{product_id}
     """
     try:
         with REQUEST_LATENCY.labels(method="GET", endpoint="/api/products/search").time():
-            products = db.search_products(q)
+            # If query is empty, return all products
+            if not q or q.strip() == "":
+                products = db.get_products()
+            else:
+                products = db.search_products(q)
 
         REQUEST_COUNT.labels(
             method="GET", endpoint="/api/products/search", status="200").inc()

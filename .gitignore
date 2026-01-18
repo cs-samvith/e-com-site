@@ -1,2 +1,6 @@
 /services/product-service/venv
 /services/product-service/app/__pycache__
+/services/user-service/venv
+/services/user-service/app/__pycache__
+/services/frontend-service/node_modules
+/services/frontend-service/.next

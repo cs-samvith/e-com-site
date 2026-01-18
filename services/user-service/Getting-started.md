@@ -1,397 +1,269 @@
-# Getting Started with Product Service
+# Getting Started with User Service
 
-## 🚀 Quick Start (3 Options)
+## 🚀 Quick Start (3 Steps)
 
-### Option 1: Instant Start (No Setup Required!)
-
-```bash
-# Install minimal dependencies
-pip install fastapi uvicorn pydantic pydantic-settings prometheus-client python-json-logger
-
-# Run immediately
-python -m uvicorn app.main:app --reload --port 8081
-
-# Test it
-curl http://localhost:8081/api/products
-```
-
-✅ **Works immediately**  
-✅ **No database setup**  
-✅ **10 mock products ready**  
-⚠️ Data lost on restart
-
----
-
-### Option 2: Full Stack (Recommended)
+### Step 1: Setup
 
 ```bash
-# Start everything with one command
-docker-compose up -d
+cd C:\mygit\e-com-site\services\user-service
 
-# Service is ready!
-curl http://localhost:8081/api/products
+# Create virtual environment
+python -m venv venv
 
-# View logs
-docker-compose logs -f product-service
+# Activate
+venv\Scripts\activate.bat
 
-# Stop everything
-docker-compose down
-```
-
-✅ **PostgreSQL (persistent data)**  
-✅ **Redis (caching)**  
-✅ **RabbitMQ (messaging)**  
-✅ **All features enabled**
-
----
-
-### Option 3: Interactive Menu
-
-```bash
-# Make script executable
-chmod +x quickstart.sh
-
-# Run interactive menu
-./quickstart.sh
-```
-
-Choose your preferred option from the menu!
-
----
-
-## 🧪 Test the Service
-
-```bash
-# Install test dependencies
-pip install requests
-
-# Run test suite
-python test_service.py
-```
-
-This will test:
-
-- ✓ Health checks
-- ✓ All CRUD operations
-- ✓ Search functionality
-- ✓ Caching
-- ✓ Metrics endpoint
-
----
-
-## 📚 API Examples
-
-### Get All Products
-
-```bash
-curl http://localhost:8081/api/products
-```
-
-### Get Single Product
-
-```bash
-# Get product ID from above, then:
-curl http://localhost:8081/api/products/{product_id}
-```
-
-### Create Product
-
-```bash
-curl -X POST http://localhost:8081/api/products \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Gaming Mouse",
-    "description": "RGB gaming mouse",
-    "price": 79.99,
-    "category": "Electronics",
-    "inventory_count": 50
-  }'
-```
-
-### Search Products
-
-```bash
-curl "http://localhost:8081/api/products/search?q=laptop"
-```
-
-### Health Check
-
-```bash
-curl http://localhost:8081/healthz
-```
-
-### Prometheus Metrics
-
-```bash
-curl http://localhost:8081/metrics
-```
-
----
-
-## 🐳 Docker Commands
-
-### Start Full Stack
-
-```bash
-docker-compose up -d
-```
-
-### View Logs
-
-```bash
-# All services
-docker-compose logs -f
-
-# Product service only
-docker-compose logs -f product-service
-
-# PostgreSQL
-docker-compose logs -f postgres
-```
-
-### Check Service Status
-
-```bash
-docker-compose ps
-```
-
-### Restart Service
-
-```bash
-docker-compose restart product-service
-```
-
-### Stop Everything
-
-```bash
-docker-compose down
-```
-
-### Clean Slate (Remove Data)
-
-```bash
-docker-compose down -v
-```
-
-### Rebuild and Start
-
-```bash
-docker-compose up -d --build
-```
-
----
-
-## 🔍 Access Services
-
-When using Docker Compose:
-
-| Service             | URL                    | Credentials       |
-| ------------------- | ---------------------- | ----------------- |
-| Product API         | http://localhost:8081  | -                 |
-| RabbitMQ Management | http://localhost:15672 | guest/guest       |
-| PostgreSQL          | localhost:5432         | postgres/postgres |
-| Redis               | localhost:6379         | -                 |
-
----
-
-## 🛠️ Development Workflow
-
-### 1. Start Dependencies Only
-
-```bash
-# Start just PostgreSQL and Redis
-docker run -d --name postgres-local \
-  -e POSTGRES_PASSWORD=postgres \
-  -e POSTGRES_DB=products_db \
-  -p 5432:5432 postgres:15
-
-docker run -d --name redis-local \
-  -p 6379:6379 redis:7-alpine
-```
-
-### 2. Run Service Locally
-
-```bash
 # Install dependencies
 pip install -r requirements.txt
+```
 
-# Set environment
-export DB_HOST=localhost
-export REDIS_HOST=localhost
+### Step 2: Run
 
-# Run with auto-reload
+```bash
+# Run in mock mode (no dependencies needed)
+python -m uvicorn app.main:app --reload --port 8080
+
+# OR use helper script
+run-mock.bat
+```
+
+### Step 3: Test
+
+Open browser: http://localhost:8080/docs
+
+---
+
+## 🧪 Test Authentication Flow
+
+### Via Swagger UI (Easiest!)
+
+1. **Go to:** http://localhost:8080/docs
+
+2. **Login:**
+   - Find `POST /api/users/login`
+   - Click "Try it out"
+   - Use test account:
+     ```json
+     {
+       "email": "john.doe@example.com",
+       "password": "password123"
+     }
+     ```
+   - Click "Execute"
+   - Copy the `access_token` from response
+
+3. **Authorize:**
+   - Click "Authorize" button (🔒 at top right)
+   - Paste the token (just the token, no "Bearer")
+   - Click "Authorize" then "Close"
+
+4. **Test Protected Endpoints:**
+   - Try `GET /api/users/profile`
+   - Try `GET /api/users` (list all users)
+   - All will work with your token! ✅
+
+---
+
+### Via curl
+
+```bash
+# 1. Login
+curl -X POST http://localhost:8080/api/users/login ^
+  -H "Content-Type: application/json" ^
+  -d "{\"email\":\"john.doe@example.com\",\"password\":\"password123\"}"
+
+# 2. Copy access_token from response
+
+# 3. Get profile (replace YOUR_TOKEN)
+curl http://localhost:8080/api/users/profile ^
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+---
+
+## 📋 Mock Test Accounts
+
+All accounts have password: `password123`
+
+| Email                     | Name          |
+| ------------------------- | ------------- |
+| john.doe@example.com      | John Doe      |
+| jane.smith@example.com    | Jane Smith    |
+| bob.wilson@example.com    | Bob Wilson    |
+| alice.brown@example.com   | Alice Brown   |
+| charlie.davis@example.com | Charlie Davis |
+
+---
+
+## 🔑 Authentication Explained
+
+### How JWT Works
+
+```
+1. User logs in with email/password
+   ↓
+2. Service verifies credentials
+   ↓
+3. Service generates JWT token (expires in 24 hours)
+   ↓
+4. User receives token
+   ↓
+5. User includes token in subsequent requests
+   Header: Authorization: Bearer <token>
+   ↓
+6. Service validates token and returns data
+```
+
+### What's in the Token?
+
+```json
+{
+  "user_id": "f0014205-acec-47b2-83f5-f2d11ca42f9b",
+  "email": "john.doe@example.com",
+  "exp": 1737201220,
+  "iat": 1737114820
+}
+```
+
+- `user_id`: User's unique ID
+- `email`: User's email
+- `exp`: Expiration timestamp (24 hours from creation)
+- `iat`: Issued at timestamp
+
+---
+
+## 🔐 Security Features
+
+### Password Hashing
+
+- Uses **bcrypt** with 12 rounds
+- Passwords never stored in plain text
+- Verify password on login
+
+### JWT Tokens
+
+- Signed with **HS256** algorithm
+- Secret key: `JWT_SECRET` (change in production!)
+- Expires after 24 hours (configurable)
+
+### Token Blacklisting
+
+- Logout blacklists the token
+- Blacklisted tokens rejected even if not expired
+- Stored in Redis (or skipped if Redis unavailable)
+
+---
+
+## 🧪 Complete Test Script
+
+Create `test-auth.bat`:
+
+```batch
+@echo off
+echo ========================================
+echo Testing User Service Authentication
+echo ========================================
+echo.
+
+echo [1/5] Health check...
+curl http://localhost:8080/healthz
+echo.
+echo.
+
+echo [2/5] Login with test account...
+curl -X POST http://localhost:8080/api/users/login -H "Content-Type: application/json" -d "{\"email\":\"john.doe@example.com\",\"password\":\"password123\"}" > token.json
+echo.
+type token.json
+echo.
+echo.
+
+echo [3/5] Copy the access_token from above
+echo Paste it here (without quotes):
+set /p TOKEN=Token:
+echo.
+
+echo [4/5] Getting user profile...
+curl http://localhost:8080/api/users/profile -H "Authorization: Bearer %TOKEN%"
+echo.
+echo.
+
+echo [5/5] Logout...
+curl -X POST http://localhost:8080/api/users/logout -H "Authorization: Bearer %TOKEN%"
+echo.
+echo.
+
+echo ========================================
+echo Test Complete!
+echo ========================================
+pause
+```
+
+---
+
+## 🐛 Common Issues
+
+### "ModuleNotFoundError: No module named 'jwt'"
+
+**Fix:** Update `app/auth.py` line 1:
+
+```python
+from jose import jwt  # Correct
+# NOT: import jwt
+```
+
+### "passlib.handlers.bcrypt - WARNING"
+
+This warning is harmless. Password hashing still works correctly.
+
+### Swagger authorization not working
+
+1. Make sure you clicked "Authorize" button
+2. Paste ONLY the token (no "Bearer" prefix)
+3. Token must be valid (not expired, not logged out)
+
+---
+
+## 📊 Integration with Product Service
+
+Both services can work together:
+
+```bash
+# Terminal 1: User Service
+cd services\user-service
+venv\Scripts\activate.bat
+python -m uvicorn app.main:app --reload --port 8080
+
+# Terminal 2: Product Service
+cd services\product-service
+venv\Scripts\activate.bat
 python -m uvicorn app.main:app --reload --port 8081
-```
 
-### 3. Make Changes
-
-Edit files in `app/` directory - service auto-reloads!
-
----
-
-## 📊 Monitoring
-
-### Check Health
-
-```bash
-# Liveness (is service alive?)
-curl http://localhost:8081/healthz
-
-# Readiness (ready for traffic?)
-curl http://localhost:8081/ready
-```
-
-### View Metrics
-
-```bash
-curl http://localhost:8081/metrics
-```
-
-### Cache Statistics
-
-```bash
-curl http://localhost:8081/debug/cache-stats
+# Test flow:
+# 1. Login to get token (User Service)
+# 2. Use token to access products (Product Service - if auth enabled)
 ```
 
 ---
 
-## 🐛 Troubleshooting
+## ✅ Success Checklist
 
-### Service Won't Start
+- [ ] Service starts without errors
+- [ ] Can access http://localhost:8080/healthz
+- [ ] Can login with test account
+- [ ] Receive JWT token
+- [ ] Can access `/api/users/profile` with token
+- [ ] Swagger UI works with authorization
 
-**Check if port is in use:**
-
-```bash
-lsof -i :8081
-# If something is using it:
-kill -9 <PID>
-```
-
-**Check dependencies:**
-
-```bash
-# PostgreSQL
-docker exec postgres-local psql -U postgres -c "SELECT 1"
-
-# Redis
-docker exec redis-local redis-cli ping
-
-# RabbitMQ
-docker exec rabbitmq-local rabbitmq-diagnostics ping
-```
-
-### No Mock Data
-
-```bash
-# Recreate database
-docker-compose down -v
-docker-compose up -d
-```
-
-### Import Errors
-
-```bash
-# Reinstall dependencies
-pip install -r requirements.txt
-```
-
-### Database Connection Failed
-
-Just run without PostgreSQL! Service automatically uses in-memory mock database:
-
-```bash
-python -m uvicorn app.main:app --port 8081
-```
+If all checked, you're ready! 🚀
 
 ---
 
-## 📁 Project Structure
+## 🚀 Next Steps
 
-```
-product-service/
-├── app/
-│   ├── main.py           # FastAPI app & routes
-│   ├── models.py         # Data models
-│   ├── database.py       # PostgreSQL handler
-│   ├── mock_database.py  # In-memory mock
-│   ├── cache.py          # Redis cache
-│   ├── queue.py          # RabbitMQ consumer
-│   └── config.py         # Configuration
-├── docker-compose.yml    # Local dev stack
-├── Dockerfile           # Container image
-├── requirements.txt     # Python dependencies
-├── test_service.py      # Test suite
-├── quickstart.sh        # Interactive menu
-└── README.md           # Full documentation
-```
+- ✅ User Service running
+- ⏭️ Create Frontend Service (React UI)
+- ⏭️ Run all services together with Podman
+- ⏭️ Create Kubernetes manifests
+- ⏭️ Deploy to K8s cluster
 
----
-
-## ✅ Verification Checklist
-
-After starting the service, verify:
-
-- [ ] Service responds: `curl http://localhost:8081/healthz`
-- [ ] Can get products: `curl http://localhost:8081/api/products`
-- [ ] Can create product: `curl -X POST ...`
-- [ ] Can search: `curl http://localhost:8081/api/products/search?q=laptop`
-- [ ] Metrics work: `curl http://localhost:8081/metrics`
-
-Run the test suite to verify everything:
-
-```bash
-python test_service.py
-```
-
----
-
-## 🎯 Next Steps
-
-1. ✅ **Product Service** - You are here!
-2. ⏭️ **User Service** - Authentication & user management
-3. ⏭️ **Frontend Service** - Web UI
-4. ⏭️ **Kubernetes Manifests** - Deploy to K8s
-5. ⏭️ **Service Mesh** - Istio for mTLS
-6. ⏭️ **Autoscaling** - HPA & KEDA
-7. ⏭️ **Observability** - Prometheus, Grafana, Jaeger
-
----
-
-## 💡 Tips
-
-- **Development**: Use `--reload` flag for auto-restart on code changes
-- **Testing**: Use standalone mode for fastest iteration
-- **Production-like**: Use Docker Compose for full stack testing
-- **Debugging**: Check logs with `docker-compose logs -f product-service`
-- **Performance**: Redis caching improves response time by ~10x
-
----
-
-## 🆘 Need Help?
-
-1. Check service logs: `docker-compose logs product-service`
-2. Test individual endpoints: `curl -v http://localhost:8081/api/products`
-3. Verify dependencies: See troubleshooting section above
-4. Start fresh: `docker-compose down -v && docker-compose up -d`
-
----
-
-## 🎉 Success!
-
-If you can run these commands successfully, you're ready to go:
-
-```bash
-# Health check
-curl http://localhost:8081/healthz
-# Should return: {"status":"healthy",...}
-
-# Get products
-curl http://localhost:8081/api/products
-# Should return: Array of 10 products
-
-# Metrics
-curl http://localhost:8081/metrics
-# Should return: Prometheus metrics
-```
-
-You're all set! 🚀
+Ready to continue? 🎯

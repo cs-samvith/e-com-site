@@ -22,7 +22,7 @@ export const productService = {
    * Search products
    */
   searchProducts: async (query: string): Promise<Product[]> => {
-    const response = await api.get(`/api/products/search?q=${encodeURIComponent(query)}`);
+    const response = await api.get(`/api/products/search/?q=${encodeURIComponent(query)}`);
     return response.data;
   },
 

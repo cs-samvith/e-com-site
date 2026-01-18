@@ -1,5 +1,14 @@
+from app.queue import queue_publisher
+from app.cache import cache
+from app.auth import auth_handler
+from app.models import (
+    User, UserCreate, UserUpdate, UserLogin, UserPasswordUpdate,
+    Token, Session, UserEvent, HealthResponse
+)
+from app.config import settings
 from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi.responses import Response
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import List, Optional
 from uuid import UUID
 import logging
@@ -7,34 +16,47 @@ from datetime import datetime, timedelta
 from prometheus_client import Counter, Histogram, generate_latest
 import secrets
 
-# Import app modules
-from app.config import settings
-from app.models import (
-    User, UserCreate, UserUpdate, UserLogin, UserPasswordUpdate,
-    Token, Session, UserEvent, HealthResponse
-)
-from app.auth import auth_handler
-
-# Try to import real database, fall back to mock
-try:
-    from app.database import db
-    USE_REAL_DB = True
-except Exception as e:
-    logging.warning(
-        f"Failed to initialize PostgreSQL: {e}. Using mock database.")
-    from app.mock_database import MockDatabase
-    db = MockDatabase()
-    USE_REAL_DB = False
-
-from app.cache import cache
-from app.queue import queue_publisher
-
-# Configure logging
+# Configure logging FIRST
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Import app modules
+
+# Determine which database to use
+if settings.MOCK_MODE:
+    logger.info("MOCK_MODE=True: Using mock in-memory database")
+    from app.mock_database import MockDatabase
+    db = MockDatabase()
+    USE_REAL_DB = False
+elif settings.DB_HOST in ['postgres-service']:
+    logger.info(f"DB_HOST={settings.DB_HOST}: Using mock in-memory database")
+    from app.mock_database import MockDatabase
+    db = MockDatabase()
+    USE_REAL_DB = False
+else:
+    try:
+        logger.info(
+            f"Attempting to connect to PostgreSQL at {settings.DB_HOST}:{settings.DB_PORT}")
+        from app.database import db
+        if db.health_check():
+            logger.info("✓ Connected to PostgreSQL - using real database")
+            USE_REAL_DB = True
+        else:
+            logger.warning(
+                "PostgreSQL health check failed - using mock database")
+            from app.mock_database import MockDatabase
+            db = MockDatabase()
+            USE_REAL_DB = False
+    except Exception as e:
+        logger.warning(
+            f"Failed to initialize PostgreSQL: {e}. Using mock database.")
+        from app.mock_database import MockDatabase
+        db = MockDatabase()
+        USE_REAL_DB = False
+
 
 # Prometheus metrics
 REQUEST_COUNT = Counter(
@@ -56,16 +78,48 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# Security scheme for Swagger UI
+security = HTTPBearer()
 
-# Dependency: Get current user from token
+
+# Dependency: Get current user from token (for Swagger)
+async def get_current_user_swagger(credentials: HTTPAuthorizationCredentials = Depends(security)) -> User:
+    """Get current authenticated user from JWT token (Swagger compatible)"""
+    token = credentials.credentials
+
+    # Check if token is blacklisted
+    if cache.is_token_blacklisted(token):
+        logger.warning("Token is blacklisted")
+        raise HTTPException(status_code=401, detail="Token has been revoked")
+
+    # Decode token
+    token_data = auth_handler.decode_token(token)
+    if not token_data:
+        logger.warning("Invalid or expired token")
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    # Get user from database
+    user = db.get_user_by_id(token_data.user_id)
+    if not user:
+        logger.warning(f"User not found for token: {token_data.user_id}")
+        raise HTTPException(status_code=401, detail="User not found")
+
+    logger.info(f"User authenticated: {user.email}")
+    return user
+
+
+# Dependency: Get current user from token (for direct API calls)
 async def get_current_user(authorization: Optional[str] = Header(None)) -> User:
     """Get current authenticated user from JWT token"""
     if not authorization:
+        logger.warning("No authorization header provided")
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     # Extract token from "Bearer <token>"
     parts = authorization.split()
     if len(parts) != 2 or parts[0].lower() != "bearer":
+        logger.warning(
+            f"Invalid authorization header format: {authorization[:50]}")
         raise HTTPException(
             status_code=401, detail="Invalid authentication header")
 
@@ -73,18 +127,22 @@ async def get_current_user(authorization: Optional[str] = Header(None)) -> User:
 
     # Check if token is blacklisted
     if cache.is_token_blacklisted(token):
+        logger.warning("Token is blacklisted")
         raise HTTPException(status_code=401, detail="Token has been revoked")
 
     # Decode token
     token_data = auth_handler.decode_token(token)
     if not token_data:
+        logger.warning("Invalid or expired token")
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
     # Get user from database
     user = db.get_user_by_id(token_data.user_id)
     if not user:
+        logger.warning(f"User not found for token: {token_data.user_id}")
         raise HTTPException(status_code=401, detail="User not found")
 
+    logger.info(f"User authenticated: {user.email}")
     return user
 
 
@@ -116,6 +174,25 @@ async def shutdown_event():
     """Cleanup on shutdown"""
     logger.info("Shutting down...")
     queue_publisher.close()
+
+
+@app.get("/")
+async def root():
+    """Root endpoint"""
+    return {
+        "service": settings.SERVICE_NAME,
+        "status": "running",
+        "version": "1.0.0",
+        "endpoints": {
+            "health": "/healthz",
+            "ready": "/ready",
+            "metrics": "/metrics",
+            "register": "/api/users/register",
+            "login": "/api/users/login",
+            "profile": "/api/users/profile",
+            "docs": "/docs"
+        }
+    }
 
 
 @app.get("/healthz", response_model=HealthResponse)
@@ -270,7 +347,7 @@ async def logout(current_user: User = Depends(get_current_user), authorization: 
 
 
 @app.get("/api/users/profile", response_model=User)
-async def get_profile(current_user: User = Depends(get_current_user)):
+async def get_profile(current_user: User = Depends(get_current_user_swagger)):
     """Get current user profile"""
     return current_user
 
@@ -278,7 +355,7 @@ async def get_profile(current_user: User = Depends(get_current_user)):
 @app.put("/api/users/profile", response_model=User)
 async def update_profile(
     user_update: UserUpdate,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_swagger)
 ):
     """Update current user profile"""
     try:
@@ -300,7 +377,7 @@ async def update_profile(
 @app.put("/api/users/password")
 async def change_password(
     password_update: UserPasswordUpdate,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_swagger)
 ):
     """Change user password"""
     try:
@@ -334,7 +411,7 @@ async def change_password(
 async def get_users(
     limit: int = 100,
     offset: int = 0,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_swagger)
 ):
     """Get all users (admin endpoint - simplified, no real auth check)"""
     try:
@@ -348,7 +425,7 @@ async def get_users(
 @app.get("/api/users/{user_id}", response_model=User)
 async def get_user(
     user_id: UUID,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_swagger)
 ):
     """Get user by ID"""
     try:

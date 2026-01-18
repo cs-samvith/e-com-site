@@ -62,15 +62,9 @@ curl http://localhost:8080/healthz
 ### 1. Register New User
 
 ```bash
-curl -X POST http://localhost:8080/api/users/register \
-  -H "Content-Type: application/json" \
-  -d '{
-    "email": "test@example.com",
-    "password": "securepass123",
-    "first_name": "Test",
-    "last_name": "User",
-    "phone": "+1-555-1234"
-  }'
+curl -X POST http://localhost:8080/api/users/register ^
+  -H "Content-Type: application/json" ^
+  -d "{\"email\":\"test@example.com\",\"password\":\"securepass123\",\"first_name\":\"Test\",\"last_name\":\"User\",\"phone\":\"+1-555-1234\"}"
 ```
 
 Response:
@@ -82,20 +76,17 @@ Response:
   "first_name": "Test",
   "last_name": "User",
   "phone": "+1-555-1234",
-  "created_at": "2026-01-17T15:30:00Z",
-  "updated_at": "2026-01-17T15:30:00Z"
+  "created_at": "2026-01-18T12:00:00Z",
+  "updated_at": "2026-01-18T12:00:00Z"
 }
 ```
 
 ### 2. Login
 
 ```bash
-curl -X POST http://localhost:8080/api/users/login \
-  -H "Content-Type: application/json" \
-  -d '{
-    "email": "test@example.com",
-    "password": "securepass123"
-  }'
+curl -X POST http://localhost:8080/api/users/login ^
+  -H "Content-Type: application/json" ^
+  -d "{\"email\":\"test@example.com\",\"password\":\"securepass123\"}"
 ```
 
 Response:
@@ -108,47 +99,42 @@ Response:
 }
 ```
 
+**Important:** Copy the `access_token` value for subsequent requests!
+
 ### 3. Get Profile (Authenticated)
 
 ```bash
-# Save token from login response
-TOKEN="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-
-curl http://localhost:8080/api/users/profile \
-  -H "Authorization: Bearer $TOKEN"
+# Replace YOUR_TOKEN with the access_token from login
+curl http://localhost:8080/api/users/profile ^
+  -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
 ### 4. Update Profile
 
 ```bash
-curl -X PUT http://localhost:8080/api/users/profile \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "first_name": "Updated",
-    "last_name": "Name",
-    "phone": "+1-555-9999"
-  }'
+curl -X PUT http://localhost:8080/api/users/profile ^
+  -H "Authorization: Bearer YOUR_TOKEN" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"first_name\":\"Updated\",\"last_name\":\"Name\",\"phone\":\"+1-555-9999\"}"
 ```
 
 ### 5. Change Password
 
 ```bash
-curl -X PUT http://localhost:8080/api/users/password \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "old_password": "securepass123",
-    "new_password": "newsecurepass456"
-  }'
+curl -X PUT http://localhost:8080/api/users/password ^
+  -H "Authorization: Bearer YOUR_TOKEN" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"old_password\":\"securepass123\",\"new_password\":\"newsecurepass456\"}"
 ```
 
 ### 6. Logout
 
 ```bash
-curl -X POST http://localhost:8080/api/users/logout \
-  -H "Authorization: Bearer $TOKEN"
+curl -X POST http://localhost:8080/api/users/logout ^
+  -H "Authorization: Bearer YOUR_TOKEN"
 ```
+
+After logout, the token is blacklisted and cannot be used again.
 
 ## Running Options
 
@@ -311,9 +297,47 @@ Key variables:
 - Use HTTPS in production
 - Implement rate limiting for login attempts (TODO)
 
-## Testing with curl
+## Testing with Swagger UI
 
-Complete workflow:
+The easiest way to test the API is through Swagger UI:
+
+### Step 1: Open Swagger
+
+```
+http://localhost:8080/docs
+```
+
+### Step 2: Login
+
+1. Find **POST `/api/users/login`**
+2. Click "Try it out"
+3. Enter credentials:
+   ```json
+   {
+     "email": "john.doe@example.com",
+     "password": "password123"
+   }
+   ```
+4. Click "Execute"
+5. **Copy the `access_token`** from the response
+
+### Step 3: Authorize Swagger
+
+1. Click the **"Authorize"** button (🔒 lock icon at top right)
+2. Paste **ONLY the token** (without "Bearer")
+3. Click "Authorize"
+4. Click "Close"
+
+### Step 4: Test Protected Endpoints
+
+Now you can test all protected endpoints:
+
+- GET `/api/users/profile` - Your profile
+- PUT `/api/users/profile` - Update profile
+- PUT `/api/users/password` - Change password
+- GET `/api/users` - List all users
+
+All requests will automatically include the Bearer token! ✅
 
 ```bash
 # 1. Register
