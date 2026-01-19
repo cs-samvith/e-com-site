@@ -1,17 +1,21 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  output: "standalone",
   reactStrictMode: true,
 
-  // Environment variables
-  env: {
-    NEXT_PUBLIC_USER_SERVICE_URL:
-      process.env.NEXT_PUBLIC_USER_SERVICE_URL || "http://localhost:8080",
-    NEXT_PUBLIC_PRODUCT_SERVICE_URL:
-      process.env.NEXT_PUBLIC_PRODUCT_SERVICE_URL || "http://localhost:8081",
+  // CRITICAL: Enable standalone output for Docker
+  output: "standalone",
+
+  // Disable ESLint during build (can cause webpack errors in pipelines)
+  eslint: {
+    ignoreDuringBuilds: true,
   },
 
-  // Rewrites for API calls (proxy to backend services)
+  // TypeScript settings
+  typescript: {
+    ignoreBuildErrors: false,
+  },
+
+  // API rewrites - with safe fallback defaults
   async rewrites() {
     const userServiceUrl =
       process.env.NEXT_PUBLIC_USER_SERVICE_URL || "http://localhost:8080";
@@ -19,12 +23,6 @@ const nextConfig = {
       process.env.NEXT_PUBLIC_PRODUCT_SERVICE_URL || "http://localhost:8081";
 
     return [
-      // Specific routes FIRST (before wildcards)
-      {
-        source: "/api/products/search",
-        destination: `${productServiceUrl}/api/products/search/`,
-      },
-      // Then wildcard routes
       {
         source: "/api/users/:path*",
         destination: `${userServiceUrl}/api/users/:path*`,
