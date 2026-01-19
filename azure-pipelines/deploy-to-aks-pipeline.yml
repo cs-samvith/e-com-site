@@ -1,4 +1,13 @@
-trigger: none # Only manual or triggered by build completion
+trigger: none # Manual or triggered by build
+
+resources:
+  pipelines:
+    - pipeline: buildPipeline
+      source: "Build and Push Images" # Name of your build pipeline
+      trigger:
+        branches:
+          include:
+            - main
 
 parameters:
   - name: environment
@@ -35,6 +44,7 @@ stages:
         steps:
           - task: AzureCLI@2
             displayName: "Check Cluster Status"
+            name: CheckCluster
             inputs:
               azureSubscription: $(azureServiceConnection)
               scriptType: "bash"
@@ -48,6 +58,7 @@ stages:
 
                 if [ -z "$AKS_NAME" ]; then
                   echo "##vso[task.logissue type=error]AKS cluster not found in $(resourceGroup)"
+                  echo "Please run the Infrastructure pipeline first"
                   exit 1
                 fi
 
@@ -102,107 +113,76 @@ stages:
                         --query "[0].name" \
                         --output tsv)
 
-                      ACR_LOGIN_SERVER=$(az acr show \
-                        --name $ACR_NAME \
-                        --query loginServer \
-                        --output tsv)
-
                       echo "##vso[task.setvariable variable=aksClusterName]$AKS_NAME"
                       echo "##vso[task.setvariable variable=acrName]$ACR_NAME"
-                      echo "##vso[task.setvariable variable=acrLoginServer]$ACR_LOGIN_SERVER"
 
-                      # Get AKS credentials
+                      # Get AKS credentials with admin access
                       az aks get-credentials \
                         --resource-group $(resourceGroup) \
                         --name $AKS_NAME \
-                        --overwrite-existing
+                        --overwrite-existing \
+                        --admin
 
-                - task: Kubernetes@1
+                - bash: |
+                    kubectl apply -f kubernetes/base/namespace.yaml
                   displayName: "Create Namespace"
-                  inputs:
-                    connectionType: "Azure Resource Manager"
-                    azureSubscriptionEndpoint: $(azureServiceConnection)
-                    azureResourceGroup: $(resourceGroup)
-                    kubernetesCluster: $(aksClusterName)
-                    command: "apply"
-                    arguments: "-f kubernetes/base/namespace.yaml"
 
-                - task: KubernetesManifest@0
-                  displayName: "Create Database Secrets"
-                  inputs:
-                    action: "createSecret"
-                    kubernetesServiceConnection: $(azureServiceConnection)
-                    namespace: $(namespace)
-                    secretType: "generic"
-                    secretName: "database-secrets"
-                    secretArguments: |
-                      --from-literal=POSTGRES_USER=postgres
-                      --from-literal=POSTGRES_PASSWORD=$(POSTGRES_PASSWORD)
-                      --from-literal=POSTGRES_HOST=postgres-service
-                      --from-literal=POSTGRES_PORT=5432
-                      --from-literal=PRODUCT_DB_NAME=products_db
-                      --from-literal=PRODUCT_DB_USER=postgres
-                      --from-literal=PRODUCT_DB_PASSWORD=$(POSTGRES_PASSWORD)
-                      --from-literal=USER_DB_NAME=users_db
-                      --from-literal=USER_DB_USER=postgres
-                      --from-literal=USER_DB_PASSWORD=$(POSTGRES_PASSWORD)
-                      --from-literal=REDIS_HOST=redis-service
-                      --from-literal=REDIS_PORT=6379
-                      --from-literal=RABBITMQ_HOST=rabbitmq-service
-                      --from-literal=RABBITMQ_PORT=5672
-                      --from-literal=RABBITMQ_USER=admin
-                      --from-literal=RABBITMQ_PASSWORD=$(RABBITMQ_PASSWORD)
+                - bash: |
+                    # Create secrets (use variables from pipeline library)
+                    kubectl create secret generic database-secrets \
+                      --from-literal=POSTGRES_USER=postgres \
+                      --from-literal=POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
+                      --from-literal=POSTGRES_HOST=postgres-service \
+                      --from-literal=POSTGRES_PORT=5432 \
+                      --from-literal=PRODUCT_DB_NAME=products_db \
+                      --from-literal=PRODUCT_DB_USER=postgres \
+                      --from-literal=PRODUCT_DB_PASSWORD=$(POSTGRES_PASSWORD) \
+                      --from-literal=USER_DB_NAME=users_db \
+                      --from-literal=USER_DB_USER=postgres \
+                      --from-literal=USER_DB_PASSWORD=$(POSTGRES_PASSWORD) \
+                      --from-literal=REDIS_HOST=redis-service \
+                      --from-literal=REDIS_PORT=6379 \
+                      --from-literal=RABBITMQ_HOST=rabbitmq-service \
+                      --from-literal=RABBITMQ_PORT=5672 \
+                      --from-literal=RABBITMQ_USER=admin \
+                      --from-literal=RABBITMQ_PASSWORD=$(RABBITMQ_PASSWORD) \
+                      -n $(namespace) \
+                      --dry-run=client -o yaml | kubectl apply -f -
 
-                - task: KubernetesManifest@0
-                  displayName: "Create JWT Secrets"
-                  inputs:
-                    action: "createSecret"
-                    kubernetesServiceConnection: $(azureServiceConnection)
-                    namespace: $(namespace)
-                    secretType: "generic"
-                    secretName: "jwt-secrets"
-                    secretArguments: |
-                      --from-literal=JWT_SECRET=$(JWT_SECRET)
-                      --from-literal=JWT_ALGORITHM=HS256
+                    # Create JWT secrets
+                    kubectl create secret generic jwt-secrets \
+                      --from-literal=JWT_SECRET=$(JWT_SECRET) \
+                      --from-literal=JWT_ALGORITHM=HS256 \
+                      -n $(namespace) \
+                      --dry-run=client -o yaml | kubectl apply -f -
 
-                - task: Kubernetes@1
+                    echo "✅ Secrets created"
+                  displayName: "Create Secrets"
+                  env:
+                    POSTGRES_PASSWORD: $(POSTGRES_PASSWORD)
+                    RABBITMQ_PASSWORD: $(RABBITMQ_PASSWORD)
+                    JWT_SECRET: $(JWT_SECRET)
+
+                - bash: |
+                    kubectl apply -f kubernetes/data-layer/postgres/
                   displayName: "Deploy PostgreSQL"
-                  inputs:
-                    connectionType: "Azure Resource Manager"
-                    azureSubscriptionEndpoint: $(azureServiceConnection)
-                    azureResourceGroup: $(resourceGroup)
-                    kubernetesCluster: $(aksClusterName)
-                    namespace: $(namespace)
-                    command: "apply"
-                    arguments: "-f kubernetes/data-layer/postgres/"
 
-                - task: Kubernetes@1
+                - bash: |
+                    kubectl apply -f kubernetes/data-layer/redis/
                   displayName: "Deploy Redis"
-                  inputs:
-                    connectionType: "Azure Resource Manager"
-                    azureSubscriptionEndpoint: $(azureServiceConnection)
-                    azureResourceGroup: $(resourceGroup)
-                    kubernetesCluster: $(aksClusterName)
-                    namespace: $(namespace)
-                    command: "apply"
-                    arguments: "-f kubernetes/data-layer/redis/"
 
-                - task: Kubernetes@1
+                - bash: |
+                    kubectl apply -f kubernetes/data-layer/rabbitmq/
                   displayName: "Deploy RabbitMQ"
-                  inputs:
-                    connectionType: "Azure Resource Manager"
-                    azureSubscriptionEndpoint: $(azureServiceConnection)
-                    azureResourceGroup: $(resourceGroup)
-                    kubernetesCluster: $(aksClusterName)
-                    namespace: $(namespace)
-                    command: "apply"
-                    arguments: "-f kubernetes/data-layer/rabbitmq/"
 
                 - bash: |
                     echo "Waiting for data layer pods to be ready..."
                     kubectl wait --for=condition=ready pod -l app=postgres -n $(namespace) --timeout=300s || true
                     kubectl wait --for=condition=ready pod -l app=redis -n $(namespace) --timeout=120s || true
                     kubectl wait --for=condition=ready pod -l app=rabbitmq -n $(namespace) --timeout=300s || true
+
+                    echo "Data layer status:"
+                    kubectl get pods -n $(namespace) -l 'app in (postgres,redis,rabbitmq)'
                   displayName: "Wait for Data Layer"
 
   - stage: DeployServices
@@ -243,7 +223,8 @@ stages:
                       az aks get-credentials \
                         --resource-group $(resourceGroup) \
                         --name $AKS_NAME \
-                        --overwrite-existing
+                        --overwrite-existing \
+                        --admin
 
                 - bash: |
                     # Update image references in manifests
@@ -254,47 +235,29 @@ stages:
                     find kubernetes/services -name "deployment.yaml" -type f -exec sed -i \
                       "s|:latest|:${{ parameters.imageTag }}|g" {} +
 
-                    echo "✅ Manifests updated"
+                    echo "✅ Manifests updated with ACR: $(acrName) and tag: ${{ parameters.imageTag }}"
                   displayName: "Update Manifests"
 
-                - task: Kubernetes@1
+                - bash: |
+                    kubectl apply -f kubernetes/services/product-service/
                   displayName: "Deploy Product Service"
-                  inputs:
-                    connectionType: "Azure Resource Manager"
-                    azureSubscriptionEndpoint: $(azureServiceConnection)
-                    azureResourceGroup: $(resourceGroup)
-                    kubernetesCluster: $(aksClusterName)
-                    namespace: $(namespace)
-                    command: "apply"
-                    arguments: "-f kubernetes/services/product-service/"
 
-                - task: Kubernetes@1
+                - bash: |
+                    kubectl apply -f kubernetes/services/user-service/
                   displayName: "Deploy User Service"
-                  inputs:
-                    connectionType: "Azure Resource Manager"
-                    azureSubscriptionEndpoint: $(azureServiceConnection)
-                    azureResourceGroup: $(resourceGroup)
-                    kubernetesCluster: $(aksClusterName)
-                    namespace: $(namespace)
-                    command: "apply"
-                    arguments: "-f kubernetes/services/user-service/"
 
-                - task: Kubernetes@1
+                - bash: |
+                    kubectl apply -f kubernetes/services/frontend-service/
                   displayName: "Deploy Frontend Service"
-                  inputs:
-                    connectionType: "Azure Resource Manager"
-                    azureSubscriptionEndpoint: $(azureServiceConnection)
-                    azureResourceGroup: $(resourceGroup)
-                    kubernetesCluster: $(aksClusterName)
-                    namespace: $(namespace)
-                    command: "apply"
-                    arguments: "-f kubernetes/services/frontend-service/"
 
                 - bash: |
                     echo "Waiting for service pods to be ready..."
                     kubectl wait --for=condition=ready pod -l app=product-service -n $(namespace) --timeout=300s || true
                     kubectl wait --for=condition=ready pod -l app=user-service -n $(namespace) --timeout=300s || true
                     kubectl wait --for=condition=ready pod -l app=frontend-service -n $(namespace) --timeout=300s || true
+
+                    echo "Service status:"
+                    kubectl get pods -n $(namespace) -l 'app in (product-service,user-service,frontend-service)'
                   displayName: "Wait for Services"
 
   - stage: ConfigureIngress
@@ -329,18 +292,12 @@ stages:
                       az aks get-credentials \
                         --resource-group $(resourceGroup) \
                         --name $AKS_NAME \
-                        --overwrite-existing
+                        --overwrite-existing \
+                        --admin
 
-                - task: Kubernetes@1
+                - bash: |
+                    kubectl apply -f kubernetes/ingress/
                   displayName: "Deploy Ingress"
-                  inputs:
-                    connectionType: "Azure Resource Manager"
-                    azureSubscriptionEndpoint: $(azureServiceConnection)
-                    azureResourceGroup: $(resourceGroup)
-                    kubernetesCluster: $(aksClusterName)
-                    namespace: $(namespace)
-                    command: "apply"
-                    arguments: "-f kubernetes/ingress/"
 
                 - bash: |
                     echo "Waiting for ingress IP..."
@@ -380,7 +337,8 @@ stages:
                 az aks get-credentials \
                   --resource-group $(resourceGroup) \
                   --name $AKS_NAME \
-                  --overwrite-existing
+                  --overwrite-existing \
+                  --admin
 
           - bash: |
               echo "=== Deployment Status ==="
@@ -408,13 +366,17 @@ stages:
                 echo "Product Service Health:"
                 curl -f http://$INGRESS_IP/api/products/health || echo "Product service not ready"
                 
+                echo ""
                 echo "User Service Health:"
                 curl -f http://$INGRESS_IP/api/users/health || echo "User service not ready"
                 
                 echo ""
+                echo "========================================="
                 echo "✅ Application URL: http://$INGRESS_IP"
+                echo "========================================="
               else
                 echo "⚠️ Ingress IP not available yet"
+                echo "Check status: kubectl get ingress -n $(namespace)"
               fi
             displayName: "Health Check Endpoints"
             continueOnError: true

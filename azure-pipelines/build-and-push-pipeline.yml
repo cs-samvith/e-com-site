@@ -4,8 +4,7 @@ trigger:
       - main
   paths:
     include:
-      - infrastructure/bicep/*
-      - azure-pipelines/infrastructure-pipeline.yml
+      - services/*
 
 pr:
   branches:
@@ -13,7 +12,7 @@ pr:
       - main
   paths:
     include:
-      - infrastructure/bicep/*
+      - services/*
 
 parameters:
   - name: environment
@@ -24,336 +23,184 @@ parameters:
       - dev
       - staging
       - prod
-  - name: action
-    displayName: "Action"
-    type: string
-    default: "deploy"
-    values:
-      - deploy
-      - destroy
+  - name: services
+    displayName: "Services to Build"
+    type: object
+    default:
+      - product-service
+      - user-service
+      - frontend-service
 
 variables:
   - name: azureServiceConnection
     value: "azure-ecommerce-sp"
-  - name: location
-    value: "eastus"
   - name: resourceGroupPrefix
     value: "rg-ecommerce-aks"
   - name: resourceGroup
     value: "$(resourceGroupPrefix)-${{ parameters.environment }}"
-  - name: deploymentName
-    value: "aks-infra-$(Build.BuildNumber)"
+  - name: imageTag
+    value: "$(Build.BuildNumber)"
 
 stages:
-  - stage: RegisterProviders
-    displayName: "Register Azure Providers"
+  - stage: Build
+    displayName: "Build Docker Images"
     jobs:
-      - job: RegisterProviders
-        displayName: "Register Required Resource Providers"
+      - ${{ each service in parameters.services }}:
+          - job: Build_${{ replace(service, '-', '_') }}
+            displayName: "Build ${{ service }}"
+            pool:
+              vmImage: "ubuntu-latest"
+            steps:
+              - checkout: self
+
+              - task: AzureCLI@2
+                displayName: "Get ACR Info"
+                name: GetACR
+                inputs:
+                  azureSubscription: $(azureServiceConnection)
+                  scriptType: "bash"
+                  scriptLocation: "inlineScript"
+                  inlineScript: |
+                    ACR_NAME=$(az acr list \
+                      --resource-group $(resourceGroup) \
+                      --query "[0].name" \
+                      --output tsv)
+
+                    if [ -z "$ACR_NAME" ]; then
+                      echo "##vso[task.logissue type=error]ACR not found in $(resourceGroup)"
+                      echo "Please run the Infrastructure pipeline first"
+                      exit 1
+                    fi
+
+                    echo "##vso[task.setvariable variable=acrName;isOutput=true]$ACR_NAME"
+                    echo "ACR Name: $ACR_NAME"
+
+              - task: AzureCLI@2
+                displayName: "Build and Push ${{ service }}"
+                inputs:
+                  azureSubscription: $(azureServiceConnection)
+                  scriptType: "bash"
+                  scriptLocation: "inlineScript"
+                  inlineScript: |
+                    ACR_NAME=$(az acr list \
+                      --resource-group $(resourceGroup) \
+                      --query "[0].name" \
+                      --output tsv)
+
+                    SERVICE="${{ service }}"
+                    IMAGE_TAG="$(imageTag)"
+
+                    echo "Building $SERVICE in ACR: $ACR_NAME"
+                    echo "Image tags: $IMAGE_TAG, latest"
+
+                    # Build in Azure Container Registry (no Docker daemon needed)
+                    az acr build \
+                      --registry $ACR_NAME \
+                      --image $SERVICE:$IMAGE_TAG \
+                      --image $SERVICE:latest \
+                      --file services/$SERVICE/Dockerfile \
+                      services/$SERVICE
+
+                    echo "✅ $SERVICE built and pushed successfully"
+
+              - task: AzureCLI@2
+                displayName: "Verify Image ${{ service }}"
+                inputs:
+                  azureSubscription: $(azureServiceConnection)
+                  scriptType: "bash"
+                  scriptLocation: "inlineScript"
+                  inlineScript: |
+                    ACR_NAME=$(az acr list \
+                      --resource-group $(resourceGroup) \
+                      --query "[0].name" \
+                      --output tsv)
+
+                    echo "Listing tags for ${{ service }}:"
+                    az acr repository show-tags \
+                      --name $ACR_NAME \
+                      --repository ${{ service }} \
+                      --output table
+
+                    echo "✅ Image ${{ service }}:$(imageTag) verified"
+
+  - stage: Publish
+    displayName: "Publish Build Info"
+    dependsOn: Build
+    jobs:
+      - job: PublishArtifacts
+        displayName: "Publish Build Artifacts"
+        pool:
+          vmImage: "ubuntu-latest"
+        steps:
+          - task: PublishBuildArtifacts@1
+            displayName: "Publish Kubernetes Manifests"
+            inputs:
+              PathtoPublish: "kubernetes"
+              ArtifactName: "kubernetes-manifests"
+              publishLocation: "Container"
+
+          - bash: |
+              mkdir -p $(Build.ArtifactStagingDirectory)
+
+              cat > $(Build.ArtifactStagingDirectory)/build-info.txt <<EOF
+              Build Number: $(Build.BuildNumber)
+              Image Tag: $(imageTag)
+              Environment: ${{ parameters.environment }}
+              Build Date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+              Source Branch: $(Build.SourceBranch)
+              Commit: $(Build.SourceVersion)
+              EOF
+
+              echo "Build info saved"
+              cat $(Build.ArtifactStagingDirectory)/build-info.txt
+            displayName: "Create Build Info"
+
+          - task: PublishBuildArtifacts@1
+            displayName: "Publish Build Info"
+            inputs:
+              PathtoPublish: "$(Build.ArtifactStagingDirectory)"
+              ArtifactName: "drop"
+              publishLocation: "Container"
+
+  - stage: Summary
+    displayName: "Build Summary"
+    dependsOn: Build
+    jobs:
+      - job: DisplaySummary
+        displayName: "Display Build Summary"
         pool:
           vmImage: "ubuntu-latest"
         steps:
           - task: AzureCLI@2
-            displayName: "Check Existing Cluster"
+            displayName: "List All Built Images"
             inputs:
               azureSubscription: $(azureServiceConnection)
               scriptType: "bash"
               scriptLocation: "inlineScript"
               inlineScript: |
-                echo "Checking for existing AKS cluster..."
+                ACR_NAME=$(az acr list \
+                  --resource-group $(resourceGroup) \
+                  --query "[0].name" \
+                  --output tsv)
 
-                if az aks show --resource-group $(resourceGroup) --name aks-ecommerce-${{ parameters.environment }} &> /dev/null; then
-                  echo "##vso[task.logissue type=warning]⚠️ AKS cluster already exists!"
-                  echo "##vso[task.logissue type=warning]Cannot change SSH keys on existing cluster"
-                  echo "##vso[task.setvariable variable=clusterExists;isOutput=true]true"
-                  
-                  # Get cluster status
-                  STATUS=$(az aks show --resource-group $(resourceGroup) --name aks-ecommerce-${{ parameters.environment }} --query provisioningState -o tsv)
-                  echo "Existing cluster status: $STATUS"
-                else
-                  echo "✅ No existing cluster found - safe to deploy"
-                  echo "##vso[task.setvariable variable=clusterExists;isOutput=true]false"
-                fi
+                echo "========================================="
+                echo "Build Summary"
+                echo "========================================="
+                echo "ACR: $ACR_NAME"
+                echo "Image Tag: $(imageTag)"
+                echo ""
 
-          - task: AzureCLI@2
-            displayName: "Register Resource Providers"
-            inputs:
-              azureSubscription: $(azureServiceConnection)
-              scriptType: "bash"
-              scriptLocation: "inlineScript"
-              inlineScript: |
-                echo "Registering required Azure resource providers..."
-
-                PROVIDERS=(
-                  "Microsoft.ContainerService"
-                  "Microsoft.OperationsManagement"
-                  "Microsoft.OperationalInsights"
-                  "Microsoft.ContainerRegistry"
-                  "Microsoft.Network"
-                  "Microsoft.Compute"
-                  "Microsoft.Storage"
-                  "Microsoft.Authorization"
-                  "Microsoft.ManagedIdentity"
-                )
-
-                for provider in "${PROVIDERS[@]}"; do
-                  echo "Checking $provider..."
-                  STATE=$(az provider show --namespace $provider --query "registrationState" -o tsv 2>/dev/null || echo "NotRegistered")
-                  
-                  if [ "$STATE" == "Registered" ]; then
-                    echo "  ✅ Already registered"
-                  else
-                    echo "  🔄 Registering..."
-                    az provider register --namespace $provider
-                    echo "  ✅ Registration initiated"
-                  fi
+                for repo in product-service user-service frontend-service; do
+                  echo "=== $repo ==="
+                  az acr repository show-tags \
+                    --name $ACR_NAME \
+                    --repository $repo \
+                    --output table 2>/dev/null || echo "No images found"
+                  echo ""
                 done
 
-                echo "Waiting for registrations to complete..."
-                sleep 30
-
-                echo "✅ All providers registered"
-
-  - stage: Validate
-    displayName: "Validate Infrastructure"
-    dependsOn: RegisterProviders
-    jobs:
-      - job: ValidateBicep
-        displayName: "Validate Bicep Template"
-        pool:
-          vmImage: "ubuntu-latest"
-        steps:
-          - task: AzureCLI@2
-            displayName: "Azure CLI - Validate Template"
-            inputs:
-              azureSubscription: $(azureServiceConnection)
-              scriptType: "bash"
-              scriptLocation: "inlineScript"
-              inlineScript: |
-                # Generate SSH key
-                mkdir -p ~/.ssh
-                ssh-keygen -t rsa -b 2048 -f ~/.ssh/id_rsa_aks -N "" -C "aks-ecommerce-azdo"
-                SSH_PUBLIC_KEY=$(cat ~/.ssh/id_rsa_aks.pub)
-
-                cd infrastructure/bicep
-
-                # Update parameters with SSH key
-                jq --arg ssh_key "$SSH_PUBLIC_KEY" \
-                   '.parameters.sshPublicKey.value = $ssh_key' \
-                   parameters.${{ parameters.environment }}.json > parameters.tmp.json
-
-                # Create resource group
-                az group create \
-                  --name $(resourceGroup) \
-                  --location $(location)
-
-                # Validate deployment
-                az deployment group validate \
-                  --resource-group $(resourceGroup) \
-                  --template-file main.bicep \
-                  --parameters @parameters.tmp.json
-
-                echo "✅ Validation successful"
-
-  - stage: Deploy
-    displayName: "Deploy Infrastructure"
-    dependsOn: Validate
-    condition: and(succeeded(), eq('${{ parameters.action }}', 'deploy'))
-    jobs:
-      - deployment: DeployInfrastructure
-        displayName: "Deploy AKS Infrastructure"
-        environment: ${{ parameters.environment }}
-        pool:
-          vmImage: "ubuntu-latest"
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - checkout: self
-
-                - task: AzureCLI@2
-                  displayName: "Deploy Bicep Template"
-                  inputs:
-                    azureSubscription: $(azureServiceConnection)
-                    scriptType: "bash"
-                    scriptLocation: "inlineScript"
-                    inlineScript: |
-                      # Generate SSH key
-                      mkdir -p ~/.ssh
-                      ssh-keygen -t rsa -b 2048 -f ~/.ssh/id_rsa_aks -N "" -C "aks-ecommerce-azdo"
-                      SSH_PUBLIC_KEY=$(cat ~/.ssh/id_rsa_aks.pub)
-
-                      cd infrastructure/bicep
-
-                      # Update parameters
-                      jq --arg ssh_key "$SSH_PUBLIC_KEY" \
-                         '.parameters.sshPublicKey.value = $ssh_key' \
-                         parameters.${{ parameters.environment }}.json > parameters.tmp.json
-
-                      # Deploy infrastructure
-                      az deployment group create \
-                        --resource-group $(resourceGroup) \
-                        --name $(deploymentName) \
-                        --template-file main.bicep \
-                        --parameters @parameters.tmp.json \
-                        --output table
-
-                      echo "✅ Deployment successful"
-
-                - task: AzureCLI@2
-                  displayName: "Get Deployment Outputs"
-                  inputs:
-                    azureSubscription: $(azureServiceConnection)
-                    scriptType: "bash"
-                    scriptLocation: "inlineScript"
-                    inlineScript: |
-                      # Get outputs
-                      AKS_NAME=$(az deployment group show \
-                        --resource-group $(resourceGroup) \
-                        --name $(deploymentName) \
-                        --query 'properties.outputs.aksClusterName.value' \
-                        --output tsv)
-
-                      ACR_NAME=$(az deployment group show \
-                        --resource-group $(resourceGroup) \
-                        --name $(deploymentName) \
-                        --query 'properties.outputs.acrName.value' \
-                        --output tsv)
-
-                      ACR_LOGIN_SERVER=$(az deployment group show \
-                        --resource-group $(resourceGroup) \
-                        --name $(deploymentName) \
-                        --query 'properties.outputs.acrLoginServer.value' \
-                        --output tsv)
-
-                      # Set pipeline variables
-                      echo "##vso[task.setvariable variable=aksClusterName;isOutput=true]$AKS_NAME"
-                      echo "##vso[task.setvariable variable=acrName;isOutput=true]$ACR_NAME"
-                      echo "##vso[task.setvariable variable=acrLoginServer;isOutput=true]$ACR_LOGIN_SERVER"
-
-                      echo "AKS Cluster: $AKS_NAME"
-                      echo "ACR Name: $ACR_NAME"
-                      echo "ACR Login Server: $ACR_LOGIN_SERVER"
-
-                - task: AzureCLI@2
-                  displayName: "Verify Cluster"
-                  inputs:
-                    azureSubscription: $(azureServiceConnection)
-                    scriptType: "bash"
-                    scriptLocation: "inlineScript"
-                    inlineScript: |
-                      # Get AKS name from outputs
-                      AKS_NAME=$(az deployment group show \
-                        --resource-group $(resourceGroup) \
-                        --name $(deploymentName) \
-                        --query 'properties.outputs.aksClusterName.value' \
-                        --output tsv)
-
-                      echo "AKS Cluster Name: $AKS_NAME"
-
-                      # Get AKS credentials (properly set kubeconfig)
-                      az aks get-credentials \
-                        --resource-group $(resourceGroup) \
-                        --name $AKS_NAME \
-                        --overwrite-existing \
-                        --admin
-
-                      # Verify kubeconfig
-                      echo "Kubeconfig location: $KUBECONFIG"
-                      kubectl config view
-
-                      # Verify cluster connection
-                      echo "Testing cluster connection..."
-                      kubectl cluster-info
-
-                      echo "Listing nodes..."
-                      kubectl get nodes
-
-                      echo "✅ Cluster verified"
-
-                - task: AzureCLI@2
-                  displayName: "Fix ACR Permissions"
-                  inputs:
-                    azureSubscription: $(azureServiceConnection)
-                    scriptType: "bash"
-                    scriptLocation: "inlineScript"
-                    inlineScript: |
-                      # Get AKS and ACR info
-                      AKS_NAME=$(az aks list \
-                        --resource-group $(resourceGroup) \
-                        --query "[0].name" \
-                        --output tsv)
-
-                      ACR_NAME=$(az acr list \
-                        --resource-group $(resourceGroup) \
-                        --query "[0].name" \
-                        --output tsv)
-
-                      echo "AKS Cluster: $AKS_NAME"
-                      echo "ACR: $ACR_NAME"
-
-                      # Get kubelet identity
-                      KUBELET_IDENTITY=$(az aks show \
-                        --resource-group $(resourceGroup) \
-                        --name $AKS_NAME \
-                        --query identityProfile.kubeletidentity.objectId \
-                        --output tsv)
-
-                      echo "Kubelet Identity: $KUBELET_IDENTITY"
-
-                      # Get ACR resource ID
-                      ACR_ID=$(az acr show \
-                        --name $ACR_NAME \
-                        --query id \
-                        --output tsv)
-
-                      echo "ACR Resource ID: $ACR_ID"
-
-                      # Assign AcrPull role
-                      echo "Assigning AcrPull role..."
-                      az role assignment create \
-                        --assignee $KUBELET_IDENTITY \
-                        --role AcrPull \
-                        --scope $ACR_ID
-
-                      echo "✅ ACR permissions configured"
-
-  - stage: Destroy
-    displayName: "Destroy Infrastructure"
-    dependsOn: Validate
-    condition: and(succeeded(), eq('${{ parameters.action }}', 'destroy'))
-    jobs:
-      - job: ConfirmDestroy
-        displayName: "Confirm Destruction"
-        pool: server
-        steps:
-          - task: ManualValidation@0
-            displayName: "Manual Approval Required"
-            inputs:
-              notifyUsers: ""
-              instructions: "This will DELETE all infrastructure in $(resourceGroup). Are you sure?"
-
-      - deployment: DestroyInfrastructure
-        displayName: "Delete Resource Group"
-        dependsOn: ConfirmDestroy
-        environment: ${{ parameters.environment }}
-        pool:
-          vmImage: "ubuntu-latest"
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - task: AzureCLI@2
-                  displayName: "Delete Resource Group"
-                  inputs:
-                    azureSubscription: $(azureServiceConnection)
-                    scriptType: "bash"
-                    scriptLocation: "inlineScript"
-                    inlineScript: |
-                      echo "Deleting resource group: $(resourceGroup)"
-                      az group delete \
-                        --name $(resourceGroup) \
-                        --yes \
-                        --no-wait
-
-                      echo "✅ Deletion initiated"
+                echo "========================================="
+                echo "✅ All images built successfully!"
+                echo "========================================="
+                echo ""
+                echo "Next step: Run 'Deploy to AKS' pipeline"

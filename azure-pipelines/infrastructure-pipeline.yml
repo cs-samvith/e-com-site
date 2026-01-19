@@ -1,19 +1,6 @@
-trigger:
-  branches:
-    include:
-      - main
-  paths:
-    include:
-      - infrastructure/bicep/*
-      - azure-pipelines/infrastructure-pipeline.yml
+trigger: none # Manual deployment only
 
-pr:
-  branches:
-    include:
-      - main
-  paths:
-    include:
-      - infrastructure/bicep/*
+pr: none # No PR triggers
 
 parameters:
   - name: environment
@@ -45,16 +32,17 @@ variables:
     value: "aks-infra-$(Build.BuildNumber)"
 
 stages:
-  - stage: RegisterProviders
-    displayName: "Register Azure Providers"
+  - stage: CheckExisting
+    displayName: "Check Existing Resources"
     jobs:
-      - job: RegisterProviders
-        displayName: "Register Required Resource Providers"
+      - job: CheckCluster
+        displayName: "Check if Cluster Already Exists"
         pool:
           vmImage: "ubuntu-latest"
         steps:
           - task: AzureCLI@2
-            displayName: "Check Existing Cluster"
+            name: CheckCluster
+            displayName: "Check for Existing Cluster"
             inputs:
               azureSubscription: $(azureServiceConnection)
               scriptType: "bash"
@@ -63,18 +51,32 @@ stages:
                 echo "Checking for existing AKS cluster..."
 
                 if az aks show --resource-group $(resourceGroup) --name aks-ecommerce-${{ parameters.environment }} &> /dev/null; then
-                  echo "##vso[task.logissue type=warning]⚠️ AKS cluster already exists!"
-                  echo "##vso[task.logissue type=warning]Cannot change SSH keys on existing cluster"
+                  echo "##vso[task.logissue type=warning]⚠️  AKS cluster already exists!"
+                  echo "##vso[task.logissue type=warning]Skipping deployment to avoid SSH key error"
                   echo "##vso[task.setvariable variable=clusterExists;isOutput=true]true"
                   
-                  # Get cluster status
                   STATUS=$(az aks show --resource-group $(resourceGroup) --name aks-ecommerce-${{ parameters.environment }} --query provisioningState -o tsv)
                   echo "Existing cluster status: $STATUS"
+                  
+                  echo ""
+                  echo "To deploy applications instead:"
+                  echo "1. Run the 'Build and Push Images' pipeline"
+                  echo "2. Run the 'Deploy to AKS' pipeline"
                 else
                   echo "✅ No existing cluster found - safe to deploy"
                   echo "##vso[task.setvariable variable=clusterExists;isOutput=true]false"
                 fi
 
+  - stage: RegisterProviders
+    displayName: "Register Azure Providers"
+    dependsOn: CheckExisting
+    condition: and(succeeded(), eq(dependencies.CheckExisting.outputs['CheckCluster.CheckCluster.clusterExists'], 'false'))
+    jobs:
+      - job: RegisterProviders
+        displayName: "Register Required Resource Providers"
+        pool:
+          vmImage: "ubuntu-latest"
+        steps:
           - task: AzureCLI@2
             displayName: "Register Resource Providers"
             inputs:
@@ -138,9 +140,20 @@ stages:
                 cd infrastructure/bicep
 
                 # Update parameters with SSH key
-                jq --arg ssh_key "$SSH_PUBLIC_KEY" \
-                   '.parameters.sshPublicKey.value = $ssh_key' \
-                   parameters.${{ parameters.environment }}.json > parameters.tmp.json
+                cat > parameters.tmp.json <<EOF
+                {
+                  "\$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+                  "contentVersion": "1.0.0.0",
+                  "parameters": {
+                    "environment": {
+                      "value": "${{ parameters.environment }}"
+                    },
+                    "sshPublicKey": {
+                      "value": "$SSH_PUBLIC_KEY"
+                    }
+                  }
+                }
+                EOF
 
                 # Create resource group
                 az group create \
@@ -150,7 +163,7 @@ stages:
                 # Validate deployment
                 az deployment group validate \
                   --resource-group $(resourceGroup) \
-                  --template-file main.bicep \
+                  --template-file main-no-rbac.bicep \
                   --parameters @parameters.tmp.json
 
                 echo "✅ Validation successful"
@@ -186,15 +199,26 @@ stages:
                       cd infrastructure/bicep
 
                       # Update parameters
-                      jq --arg ssh_key "$SSH_PUBLIC_KEY" \
-                         '.parameters.sshPublicKey.value = $ssh_key' \
-                         parameters.${{ parameters.environment }}.json > parameters.tmp.json
+                      cat > parameters.tmp.json <<EOF
+                      {
+                        "\$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+                        "contentVersion": "1.0.0.0",
+                        "parameters": {
+                          "environment": {
+                            "value": "${{ parameters.environment }}"
+                          },
+                          "sshPublicKey": {
+                            "value": "$SSH_PUBLIC_KEY"
+                          }
+                        }
+                      }
+                      EOF
 
                       # Deploy infrastructure
                       az deployment group create \
                         --resource-group $(resourceGroup) \
                         --name $(deploymentName) \
-                        --template-file main.bicep \
+                        --template-file main-no-rbac.bicep \
                         --parameters @parameters.tmp.json \
                         --output table
 
@@ -251,16 +275,12 @@ stages:
 
                       echo "AKS Cluster Name: $AKS_NAME"
 
-                      # Get AKS credentials (properly set kubeconfig)
+                      # Get AKS credentials with admin access
                       az aks get-credentials \
                         --resource-group $(resourceGroup) \
                         --name $AKS_NAME \
                         --overwrite-existing \
                         --admin
-
-                      # Verify kubeconfig
-                      echo "Kubeconfig location: $KUBECONFIG"
-                      kubectl config view
 
                       # Verify cluster connection
                       echo "Testing cluster connection..."
@@ -320,7 +340,7 @@ stages:
 
   - stage: Destroy
     displayName: "Destroy Infrastructure"
-    dependsOn: Validate
+    dependsOn: CheckExisting
     condition: and(succeeded(), eq('${{ parameters.action }}', 'destroy'))
     jobs:
       - job: ConfirmDestroy
