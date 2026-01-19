@@ -264,6 +264,10 @@ output acrLoginServer string = acr.properties.loginServer
 output logAnalyticsWorkspaceId string = logAnalytics.id
 output vnetId string = vnet.id
 output aksSubnetId string = resourceId('Microsoft.Network/virtualNetworks/subnets', vnetName, 'aks-subnet')
-output publicIPAddress string = environment != 'dev' ? reference(publicIP.id, '2023-05-01').ipAddress : 'N/A'
-output publicIPFQDN string = environment != 'dev' ? reference(publicIP.id, '2023-05-01').dnsSettings.fqdn : 'N/A'
+output publicIPAddress string = environment != 'dev'
+  ? (environment == 'prod' || environment == 'staging' ? publicIP.properties.ipAddress : 'N/A')
+  : 'N/A'
+output publicIPFQDN string = environment != 'dev'
+  ? (environment == 'prod' || environment == 'staging' ? publicIP.properties.dnsSettings.fqdn : 'N/A')
+  : 'N/A'
 output kubeletIdentity string = aks.properties.identityProfile.kubeletidentity.objectId
