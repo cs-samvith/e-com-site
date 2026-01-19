@@ -129,6 +129,9 @@ resource publicIP 'Microsoft.Network/publicIPAddresses@2023-05-01' = if (environ
 resource aks 'Microsoft.ContainerService/managedClusters@2023-10-01' = {
   name: aksClusterName
   location: location
+  dependsOn: [
+    vnet // Ensure VNet is created before AKS
+  ]
   identity: {
     type: 'SystemAssigned'
   }
@@ -147,7 +150,7 @@ resource aks 'Microsoft.ContainerService/managedClusters@2023-10-01' = {
         osDiskType: 'Managed'
         mode: 'System'
         type: 'VirtualMachineScaleSets'
-        vnetSubnetID: vnet.properties.subnets[0].id
+        vnetSubnetID: resourceId('Microsoft.Network/virtualNetworks/subnets', vnetName, 'aks-subnet')
         enableAutoScaling: true
         minCount: nodePoolConfig.minCount
         maxCount: nodePoolConfig.maxCount
@@ -241,8 +244,9 @@ output acrLoginServer string = acr.properties.loginServer
 output acrResourceId string = acr.id
 output logAnalyticsWorkspaceId string = logAnalytics.id
 output vnetId string = vnet.id
-output publicIPAddress string = environment != 'dev' ? publicIP.properties.ipAddress : 'N/A'
-output publicIPFQDN string = environment != 'dev' ? publicIP.properties.dnsSettings.fqdn : 'N/A'
+output aksSubnetId string = resourceId('Microsoft.Network/virtualNetworks/subnets', vnetName, 'aks-subnet')
+output publicIPAddress string = environment != 'dev' ? reference(publicIP.id, '2023-05-01').ipAddress : 'N/A'
+output publicIPFQDN string = environment != 'dev' ? reference(publicIP.id, '2023-05-01').dnsSettings.fqdn : 'N/A'
 output kubeletIdentity string = aks.properties.identityProfile.kubeletidentity.objectId
 
 // ============================================
