@@ -82,6 +82,8 @@ stages:
                   scriptType: "bash"
                   scriptLocation: "inlineScript"
                   inlineScript: |
+                    set -e  # Exit on error
+
                     ACR_NAME=$(az acr list \
                       --resource-group $(resourceGroup) \
                       --query "[0].name" \
@@ -90,18 +92,59 @@ stages:
                     SERVICE="${{ service }}"
                     IMAGE_TAG="$(imageTag)"
 
-                    echo "Building $SERVICE in ACR: $ACR_NAME"
+                    echo "========================================="
+                    echo "Building $SERVICE"
+                    echo "========================================="
+                    echo "ACR: $ACR_NAME"
                     echo "Image tags: $IMAGE_TAG, latest"
+                    echo ""
 
-                    # Build in Azure Container Registry (no Docker daemon needed)
+                    # Show current directory
+                    echo "Current directory: $(pwd)"
+                    echo "Directory contents:"
+                    ls -la
+                    echo ""
+
+                    # Navigate to repository root (Azure DevOps working directory)
+                    cd $(Build.SourcesDirectory)
+                    echo "Working directory: $(pwd)"
+                    echo ""
+
+                    # Verify Dockerfile exists
+                    DOCKERFILE_PATH="services/$SERVICE/Dockerfile"
+                    echo "Looking for: $DOCKERFILE_PATH"
+
+                    if [ ! -f "$DOCKERFILE_PATH" ]; then
+                      echo "##vso[task.logissue type=error]Dockerfile not found: $DOCKERFILE_PATH"
+                      echo "Available files in services/$SERVICE:"
+                      ls -la "services/$SERVICE" || echo "Service directory not found"
+                      exit 1
+                    fi
+
+                    echo "✅ Dockerfile found: $DOCKERFILE_PATH"
+                    echo ""
+
+                    # Build in Azure Container Registry
+                    echo "Starting build in ACR..."
                     az acr build \
                       --registry $ACR_NAME \
                       --image $SERVICE:$IMAGE_TAG \
                       --image $SERVICE:latest \
-                      --file services/$SERVICE/Dockerfile \
+                      --file $DOCKERFILE_PATH \
+                      --verbose \
                       services/$SERVICE
 
-                    echo "✅ $SERVICE built and pushed successfully"
+                    BUILD_RESULT=$?
+
+                    if [ $BUILD_RESULT -eq 0 ]; then
+                      echo ""
+                      echo "✅ $SERVICE built and pushed successfully"
+                      echo "   Image: $ACR_NAME.azurecr.io/$SERVICE:$IMAGE_TAG"
+                      echo "   Image: $ACR_NAME.azurecr.io/$SERVICE:latest"
+                    else
+                      echo "##vso[task.logissue type=error]Build failed with exit code $BUILD_RESULT"
+                      exit $BUILD_RESULT
+                    fi
 
               - task: AzureCLI@2
                 displayName: "Verify Image ${{ service }}"
