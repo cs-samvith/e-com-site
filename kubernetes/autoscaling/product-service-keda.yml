@@ -1,0 +1,28 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: product-service-scaledobject
+  namespace: ecommerce
+spec:
+  scaleTargetRef:
+    name: product-service
+  minReplicaCount: 2
+  maxReplicaCount: 20
+  pollingInterval: 30
+  cooldownPeriod: 300
+  triggers:
+    # Scale based on RabbitMQ queue depth
+    - type: rabbitmq
+      metadata:
+        host: amqp://guest:guest@rabbitmq-service.ecommerce.svc.cluster.local:5672
+        queueName: inventory.updates
+        mode: QueueLength
+        value: "5" # Scale up when more than 5 messages in queue
+    # Scale based on HTTP requests (using Prometheus)
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus-server.monitoring.svc.cluster.local:9090
+        metricName: http_requests_per_second
+        threshold: "100"
+        query: |
+          sum(rate(http_requests_total{service="product-service"}[1m]))

@@ -1,0 +1,24 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "location": {
+            "value": "eastus"
+        },
+        "aksClusterName": {
+            "value": "aks-ecommerce-prod"
+        },
+        "acrName": {
+            "value": "acrecommerceprod"
+        },
+        "environment": {
+            "value": "prod"
+        },
+        "dnsPrefix": {
+            "value": "aks-ecommerce-prod-dns"
+        },
+        "sshPublicKey": {
+            "value": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC... YOUR_SSH_PUBLIC_KEY_HERE"
+        }
+    }
+}

@@ -1,0 +1,121 @@
+name: Build and Push Images
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment"
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      service:
+        description: "Service to build (all builds all services)"
+        required: true
+        type: choice
+        options:
+          - all
+          - product-service
+          - user-service
+          - frontend-service
+  push:
+    branches:
+      - main
+    paths:
+      - "services/**"
+      - ".github/workflows/build-and-push.yml"
+
+env:
+  AZURE_RESOURCE_GROUP_PREFIX: "rg-ecommerce-aks"
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+
+    strategy:
+      matrix:
+        service:
+          - ${{ github.event.inputs.service == 'all' && 'product-service' || github.event.inputs.service }}
+          - ${{ github.event.inputs.service == 'all' && 'user-service' || '' }}
+          - ${{ github.event.inputs.service == 'all' && 'frontend-service' || '' }}
+        exclude:
+          - service: ""
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set environment variables
+        run: |
+          ENV="${{ github.event.inputs.environment || 'dev' }}"
+          echo "ENVIRONMENT=$ENV" >> $GITHUB_ENV
+          echo "RESOURCE_GROUP=${{ env.AZURE_RESOURCE_GROUP_PREFIX }}-$ENV" >> $GITHUB_ENV
+          echo "IMAGE_TAG=${{ github.sha }}" >> $GITHUB_ENV
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Get ACR Name
+        id: acr
+        run: |
+          ACR_NAME=$(az acr list \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --query "[0].name" \
+            --output tsv)
+
+          ACR_LOGIN_SERVER=$(az acr show \
+            --name $ACR_NAME \
+            --query loginServer \
+            --output tsv)
+
+          echo "acr_name=$ACR_NAME" >> $GITHUB_OUTPUT
+          echo "acr_login_server=$ACR_LOGIN_SERVER" >> $GITHUB_OUTPUT
+
+      - name: Login to ACR
+        run: |
+          az acr login --name ${{ steps.acr.outputs.acr_name }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and Push ${{ matrix.service }}
+        run: |
+          SERVICE="${{ matrix.service }}"
+          ACR_LOGIN_SERVER="${{ steps.acr.outputs.acr_login_server }}"
+          IMAGE_TAG="${{ env.IMAGE_TAG }}"
+
+          echo "Building $SERVICE..."
+
+          docker build \
+            -t $ACR_LOGIN_SERVER/$SERVICE:$IMAGE_TAG \
+            -t $ACR_LOGIN_SERVER/$SERVICE:latest \
+            ./services/$SERVICE
+
+          echo "Pushing $SERVICE..."
+          docker push $ACR_LOGIN_SERVER/$SERVICE:$IMAGE_TAG
+          docker push $ACR_LOGIN_SERVER/$SERVICE:latest
+
+          echo "✅ $SERVICE pushed successfully"
+
+      - name: Image Scan (Optional)
+        continue-on-error: true
+        run: |
+          az acr repository show-tags \
+            --name ${{ steps.acr.outputs.acr_name }} \
+            --repository ${{ matrix.service }} \
+            --output table
+
+      - name: Build Summary
+        run: |
+          echo "## Build Summary - ${{ matrix.service }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Image built and pushed successfully!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Service:** ${{ matrix.service }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** ${{ steps.acr.outputs.acr_login_server }}/${{ matrix.service }}:${{ env.IMAGE_TAG }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Tag:** ${{ env.IMAGE_TAG }}" >> $GITHUB_STEP_SUMMARY

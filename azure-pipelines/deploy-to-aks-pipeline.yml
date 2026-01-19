@@ -1,0 +1,420 @@
+trigger: none # Only manual or triggered by build completion
+
+parameters:
+  - name: environment
+    displayName: "Environment"
+    type: string
+    default: "dev"
+    values:
+      - dev
+      - staging
+      - prod
+  - name: imageTag
+    displayName: "Image Tag"
+    type: string
+    default: "latest"
+
+variables:
+  - name: azureServiceConnection
+    value: "azure-ecommerce-sp"
+  - name: resourceGroupPrefix
+    value: "rg-ecommerce-aks"
+  - name: resourceGroup
+    value: "$(resourceGroupPrefix)-${{ parameters.environment }}"
+  - name: namespace
+    value: "ecommerce"
+
+stages:
+  - stage: PreDeploy
+    displayName: "Pre-Deployment Checks"
+    jobs:
+      - job: ValidateCluster
+        displayName: "Validate AKS Cluster"
+        pool:
+          vmImage: "ubuntu-latest"
+        steps:
+          - task: AzureCLI@2
+            displayName: "Check Cluster Status"
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                # Get AKS cluster name
+                AKS_NAME=$(az aks list \
+                  --resource-group $(resourceGroup) \
+                  --query "[0].name" \
+                  --output tsv)
+
+                if [ -z "$AKS_NAME" ]; then
+                  echo "##vso[task.logissue type=error]AKS cluster not found in $(resourceGroup)"
+                  exit 1
+                fi
+
+                echo "##vso[task.setvariable variable=aksClusterName;isOutput=true]$AKS_NAME"
+
+                # Get cluster status
+                PROVISIONING_STATE=$(az aks show \
+                  --resource-group $(resourceGroup) \
+                  --name $AKS_NAME \
+                  --query 'provisioningState' \
+                  --output tsv)
+
+                echo "AKS Cluster: $AKS_NAME"
+                echo "Status: $PROVISIONING_STATE"
+
+                if [ "$PROVISIONING_STATE" != "Succeeded" ]; then
+                  echo "##vso[task.logissue type=error]Cluster is not in Succeeded state"
+                  exit 1
+                fi
+
+                echo "✅ Cluster validation passed"
+
+  - stage: DeployDataLayer
+    displayName: "Deploy Data Layer"
+    dependsOn: PreDeploy
+    jobs:
+      - deployment: DeployData
+        displayName: "Deploy PostgreSQL, Redis, RabbitMQ"
+        environment: ${{ parameters.environment }}
+        pool:
+          vmImage: "ubuntu-latest"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: AzureCLI@2
+                  displayName: "Get AKS Credentials"
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      AKS_NAME=$(az aks list \
+                        --resource-group $(resourceGroup) \
+                        --query "[0].name" \
+                        --output tsv)
+
+                      ACR_NAME=$(az acr list \
+                        --resource-group $(resourceGroup) \
+                        --query "[0].name" \
+                        --output tsv)
+
+                      ACR_LOGIN_SERVER=$(az acr show \
+                        --name $ACR_NAME \
+                        --query loginServer \
+                        --output tsv)
+
+                      echo "##vso[task.setvariable variable=aksClusterName]$AKS_NAME"
+                      echo "##vso[task.setvariable variable=acrName]$ACR_NAME"
+                      echo "##vso[task.setvariable variable=acrLoginServer]$ACR_LOGIN_SERVER"
+
+                      # Get AKS credentials
+                      az aks get-credentials \
+                        --resource-group $(resourceGroup) \
+                        --name $AKS_NAME \
+                        --overwrite-existing
+
+                - task: Kubernetes@1
+                  displayName: "Create Namespace"
+                  inputs:
+                    connectionType: "Azure Resource Manager"
+                    azureSubscriptionEndpoint: $(azureServiceConnection)
+                    azureResourceGroup: $(resourceGroup)
+                    kubernetesCluster: $(aksClusterName)
+                    command: "apply"
+                    arguments: "-f kubernetes/base/namespace.yaml"
+
+                - task: KubernetesManifest@0
+                  displayName: "Create Database Secrets"
+                  inputs:
+                    action: "createSecret"
+                    kubernetesServiceConnection: $(azureServiceConnection)
+                    namespace: $(namespace)
+                    secretType: "generic"
+                    secretName: "database-secrets"
+                    secretArguments: |
+                      --from-literal=POSTGRES_USER=postgres
+                      --from-literal=POSTGRES_PASSWORD=$(POSTGRES_PASSWORD)
+                      --from-literal=POSTGRES_HOST=postgres-service
+                      --from-literal=POSTGRES_PORT=5432
+                      --from-literal=PRODUCT_DB_NAME=products_db
+                      --from-literal=PRODUCT_DB_USER=postgres
+                      --from-literal=PRODUCT_DB_PASSWORD=$(POSTGRES_PASSWORD)
+                      --from-literal=USER_DB_NAME=users_db
+                      --from-literal=USER_DB_USER=postgres
+                      --from-literal=USER_DB_PASSWORD=$(POSTGRES_PASSWORD)
+                      --from-literal=REDIS_HOST=redis-service
+                      --from-literal=REDIS_PORT=6379
+                      --from-literal=RABBITMQ_HOST=rabbitmq-service
+                      --from-literal=RABBITMQ_PORT=5672
+                      --from-literal=RABBITMQ_USER=admin
+                      --from-literal=RABBITMQ_PASSWORD=$(RABBITMQ_PASSWORD)
+
+                - task: KubernetesManifest@0
+                  displayName: "Create JWT Secrets"
+                  inputs:
+                    action: "createSecret"
+                    kubernetesServiceConnection: $(azureServiceConnection)
+                    namespace: $(namespace)
+                    secretType: "generic"
+                    secretName: "jwt-secrets"
+                    secretArguments: |
+                      --from-literal=JWT_SECRET=$(JWT_SECRET)
+                      --from-literal=JWT_ALGORITHM=HS256
+
+                - task: Kubernetes@1
+                  displayName: "Deploy PostgreSQL"
+                  inputs:
+                    connectionType: "Azure Resource Manager"
+                    azureSubscriptionEndpoint: $(azureServiceConnection)
+                    azureResourceGroup: $(resourceGroup)
+                    kubernetesCluster: $(aksClusterName)
+                    namespace: $(namespace)
+                    command: "apply"
+                    arguments: "-f kubernetes/data-layer/postgres/"
+
+                - task: Kubernetes@1
+                  displayName: "Deploy Redis"
+                  inputs:
+                    connectionType: "Azure Resource Manager"
+                    azureSubscriptionEndpoint: $(azureServiceConnection)
+                    azureResourceGroup: $(resourceGroup)
+                    kubernetesCluster: $(aksClusterName)
+                    namespace: $(namespace)
+                    command: "apply"
+                    arguments: "-f kubernetes/data-layer/redis/"
+
+                - task: Kubernetes@1
+                  displayName: "Deploy RabbitMQ"
+                  inputs:
+                    connectionType: "Azure Resource Manager"
+                    azureSubscriptionEndpoint: $(azureServiceConnection)
+                    azureResourceGroup: $(resourceGroup)
+                    kubernetesCluster: $(aksClusterName)
+                    namespace: $(namespace)
+                    command: "apply"
+                    arguments: "-f kubernetes/data-layer/rabbitmq/"
+
+                - bash: |
+                    echo "Waiting for data layer pods to be ready..."
+                    kubectl wait --for=condition=ready pod -l app=postgres -n $(namespace) --timeout=300s || true
+                    kubectl wait --for=condition=ready pod -l app=redis -n $(namespace) --timeout=120s || true
+                    kubectl wait --for=condition=ready pod -l app=rabbitmq -n $(namespace) --timeout=300s || true
+                  displayName: "Wait for Data Layer"
+
+  - stage: DeployServices
+    displayName: "Deploy Microservices"
+    dependsOn: DeployDataLayer
+    jobs:
+      - deployment: DeployApps
+        displayName: "Deploy Applications"
+        environment: ${{ parameters.environment }}
+        pool:
+          vmImage: "ubuntu-latest"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: AzureCLI@2
+                  displayName: "Get Cluster Info"
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      AKS_NAME=$(az aks list \
+                        --resource-group $(resourceGroup) \
+                        --query "[0].name" \
+                        --output tsv)
+
+                      ACR_NAME=$(az acr list \
+                        --resource-group $(resourceGroup) \
+                        --query "[0].name" \
+                        --output tsv)
+
+                      echo "##vso[task.setvariable variable=aksClusterName]$AKS_NAME"
+                      echo "##vso[task.setvariable variable=acrName]$ACR_NAME"
+
+                      az aks get-credentials \
+                        --resource-group $(resourceGroup) \
+                        --name $AKS_NAME \
+                        --overwrite-existing
+
+                - bash: |
+                    # Update image references in manifests
+                    find kubernetes/services -name "deployment.yaml" -type f -exec sed -i \
+                      "s|<YOUR_ACR>|$(acrName)|g" {} +
+
+                    # Update image tags
+                    find kubernetes/services -name "deployment.yaml" -type f -exec sed -i \
+                      "s|:latest|:${{ parameters.imageTag }}|g" {} +
+
+                    echo "✅ Manifests updated"
+                  displayName: "Update Manifests"
+
+                - task: Kubernetes@1
+                  displayName: "Deploy Product Service"
+                  inputs:
+                    connectionType: "Azure Resource Manager"
+                    azureSubscriptionEndpoint: $(azureServiceConnection)
+                    azureResourceGroup: $(resourceGroup)
+                    kubernetesCluster: $(aksClusterName)
+                    namespace: $(namespace)
+                    command: "apply"
+                    arguments: "-f kubernetes/services/product-service/"
+
+                - task: Kubernetes@1
+                  displayName: "Deploy User Service"
+                  inputs:
+                    connectionType: "Azure Resource Manager"
+                    azureSubscriptionEndpoint: $(azureServiceConnection)
+                    azureResourceGroup: $(resourceGroup)
+                    kubernetesCluster: $(aksClusterName)
+                    namespace: $(namespace)
+                    command: "apply"
+                    arguments: "-f kubernetes/services/user-service/"
+
+                - task: Kubernetes@1
+                  displayName: "Deploy Frontend Service"
+                  inputs:
+                    connectionType: "Azure Resource Manager"
+                    azureSubscriptionEndpoint: $(azureServiceConnection)
+                    azureResourceGroup: $(resourceGroup)
+                    kubernetesCluster: $(aksClusterName)
+                    namespace: $(namespace)
+                    command: "apply"
+                    arguments: "-f kubernetes/services/frontend-service/"
+
+                - bash: |
+                    echo "Waiting for service pods to be ready..."
+                    kubectl wait --for=condition=ready pod -l app=product-service -n $(namespace) --timeout=300s || true
+                    kubectl wait --for=condition=ready pod -l app=user-service -n $(namespace) --timeout=300s || true
+                    kubectl wait --for=condition=ready pod -l app=frontend-service -n $(namespace) --timeout=300s || true
+                  displayName: "Wait for Services"
+
+  - stage: ConfigureIngress
+    displayName: "Configure Ingress"
+    dependsOn: DeployServices
+    jobs:
+      - deployment: DeployIngress
+        displayName: "Deploy Ingress Controller"
+        environment: ${{ parameters.environment }}
+        pool:
+          vmImage: "ubuntu-latest"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: AzureCLI@2
+                  displayName: "Get Credentials"
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      AKS_NAME=$(az aks list \
+                        --resource-group $(resourceGroup) \
+                        --query "[0].name" \
+                        --output tsv)
+
+                      echo "##vso[task.setvariable variable=aksClusterName]$AKS_NAME"
+
+                      az aks get-credentials \
+                        --resource-group $(resourceGroup) \
+                        --name $AKS_NAME \
+                        --overwrite-existing
+
+                - task: Kubernetes@1
+                  displayName: "Deploy Ingress"
+                  inputs:
+                    connectionType: "Azure Resource Manager"
+                    azureSubscriptionEndpoint: $(azureServiceConnection)
+                    azureResourceGroup: $(resourceGroup)
+                    kubernetesCluster: $(aksClusterName)
+                    namespace: $(namespace)
+                    command: "apply"
+                    arguments: "-f kubernetes/ingress/"
+
+                - bash: |
+                    echo "Waiting for ingress IP..."
+                    for i in {1..30}; do
+                      INGRESS_IP=$(kubectl get ingress ecommerce-ingress -n $(namespace) -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+                      if [ -n "$INGRESS_IP" ]; then
+                        echo "##vso[task.setvariable variable=ingressIP]$INGRESS_IP"
+                        echo "Ingress IP: $INGRESS_IP"
+                        break
+                      fi
+                      echo "Waiting for ingress IP... ($i/30)"
+                      sleep 10
+                    done
+                  displayName: "Get Ingress IP"
+
+  - stage: HealthCheck
+    displayName: "Health Checks"
+    dependsOn: ConfigureIngress
+    jobs:
+      - job: RunHealthChecks
+        displayName: "Verify Deployment"
+        pool:
+          vmImage: "ubuntu-latest"
+        steps:
+          - task: AzureCLI@2
+            displayName: "Get Credentials"
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                AKS_NAME=$(az aks list \
+                  --resource-group $(resourceGroup) \
+                  --query "[0].name" \
+                  --output tsv)
+
+                az aks get-credentials \
+                  --resource-group $(resourceGroup) \
+                  --name $AKS_NAME \
+                  --overwrite-existing
+
+          - bash: |
+              echo "=== Deployment Status ==="
+              kubectl get all -n $(namespace)
+
+              echo ""
+              echo "=== Pod Status ==="
+              kubectl get pods -n $(namespace) -o wide
+
+              echo ""
+              echo "=== Service Status ==="
+              kubectl get svc -n $(namespace)
+
+              echo ""
+              echo "=== Ingress Status ==="
+              kubectl get ingress -n $(namespace)
+            displayName: "Show Deployment Status"
+
+          - bash: |
+              INGRESS_IP=$(kubectl get ingress ecommerce-ingress -n $(namespace) -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+
+              if [ -n "$INGRESS_IP" ]; then
+                echo "Testing endpoints at $INGRESS_IP..."
+                
+                echo "Product Service Health:"
+                curl -f http://$INGRESS_IP/api/products/health || echo "Product service not ready"
+                
+                echo "User Service Health:"
+                curl -f http://$INGRESS_IP/api/users/health || echo "User service not ready"
+                
+                echo ""
+                echo "✅ Application URL: http://$INGRESS_IP"
+              else
+                echo "⚠️ Ingress IP not available yet"
+              fi
+            displayName: "Health Check Endpoints"
+            continueOnError: true

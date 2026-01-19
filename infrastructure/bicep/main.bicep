@@ -1,0 +1,245 @@
+// Main Bicep template for E-Commerce AKS Infrastructure
+// Minimal capacity for running the microservices workload
+
+@description('The location for all resources')
+param location string = resourceGroup().location
+
+@description('The name of the AKS cluster')
+param aksClusterName string = 'aks-ecommerce'
+
+@description('The name of the Azure Container Registry')
+param acrName string = 'acrecommerce${uniqueString(resourceGroup().id)}'
+
+@description('Environment name (dev, staging, prod)')
+@allowed([
+  'dev'
+  'staging'
+  'prod'
+])
+param environment string = 'dev'
+
+@description('DNS prefix for the AKS cluster')
+param dnsPrefix string = '${aksClusterName}-dns'
+
+@description('SSH public key for AKS nodes')
+param sshPublicKey string
+
+// Variables
+var nodeResourceGroup = 'rg-${aksClusterName}-nodes'
+var logAnalyticsWorkspaceName = 'law-${aksClusterName}'
+var applicationGatewayName = 'appgw-${aksClusterName}'
+var vnetName = 'vnet-${aksClusterName}'
+
+// Node pool configuration based on environment
+var nodePoolConfig = environment == 'prod' ? {
+  vmSize: 'Standard_D2s_v3'
+  minCount: 3
+  maxCount: 10
+  nodeCount: 3
+} : {
+  vmSize: 'Standard_B2ms'
+  minCount: 1
+  maxCount: 5
+  nodeCount: 2
+}
+
+// ============================================
+// 1. Log Analytics Workspace (for monitoring)
+// ============================================
+resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {
+  name: logAnalyticsWorkspaceName
+  location: location
+  properties: {
+    sku: {
+      name: 'PerGB2018'
+    }
+    retentionInDays: 30
+  }
+}
+
+// ============================================
+// 2. Azure Container Registry
+// ============================================
+resource acr 'Microsoft.ContainerRegistry/registries@2023-01-01-preview' = {
+  name: acrName
+  location: location
+  sku: {
+    name: environment == 'prod' ? 'Standard' : 'Basic'
+  }
+  properties: {
+    adminUserEnabled: false
+    publicNetworkAccess: 'Enabled'
+  }
+}
+
+// ============================================
+// 3. Virtual Network for AKS
+// ============================================
+resource vnet 'Microsoft.Network/virtualNetworks@2023-05-01' = {
+  name: vnetName
+  location: location
+  properties: {
+    addressSpace: {
+      addressPrefixes: [
+        '10.0.0.0/16'
+      ]
+    }
+    subnets: [
+      {
+        name: 'aks-subnet'
+        properties: {
+          addressPrefix: '10.0.0.0/22'
+        }
+      }
+      {
+        name: 'appgw-subnet'
+        properties: {
+          addressPrefix: '10.0.4.0/24'
+        }
+      }
+    ]
+  }
+}
+
+// ============================================
+// 4. Public IP for Application Gateway
+// ============================================
+resource publicIP 'Microsoft.Network/publicIPAddresses@2023-05-01' = if (environment != 'dev') {
+  name: '${applicationGatewayName}-pip'
+  location: location
+  sku: {
+    name: 'Standard'
+  }
+  properties: {
+    publicIPAllocationMethod: 'Static'
+    dnsSettings: {
+      domainNameLabel: toLower('${aksClusterName}-${uniqueString(resourceGroup().id)}')
+    }
+  }
+}
+
+// ============================================
+// 5. AKS Cluster
+// ============================================
+resource aks 'Microsoft.ContainerService/managedClusters@2023-10-01' = {
+  name: aksClusterName
+  location: location
+  identity: {
+    type: 'SystemAssigned'
+  }
+  properties: {
+    dnsPrefix: dnsPrefix
+    nodeResourceGroup: nodeResourceGroup
+    
+    // Agent Pool Profile (System Node Pool)
+    agentPoolProfiles: [
+      {
+        name: 'systempool'
+        count: nodePoolConfig.nodeCount
+        vmSize: nodePoolConfig.vmSize
+        osType: 'Linux'
+        osDiskSizeGB: 128
+        osDiskType: 'Managed'
+        mode: 'System'
+        type: 'VirtualMachineScaleSets'
+        vnetSubnetID: vnet.properties.subnets[0].id
+        enableAutoScaling: true
+        minCount: nodePoolConfig.minCount
+        maxCount: nodePoolConfig.maxCount
+        maxPods: 30
+        availabilityZones: environment == 'prod' ? [
+          '1'
+          '2'
+          '3'
+        ] : []
+      }
+    ]
+    
+    // Linux Profile (SSH access)
+    linuxProfile: {
+      adminUsername: 'azureuser'
+      ssh: {
+        publicKeys: [
+          {
+            keyData: sshPublicKey
+          }
+        ]
+      }
+    }
+    
+    // Network Profile
+    networkProfile: {
+      networkPlugin: 'azure'
+      networkPolicy: 'azure'
+      serviceCidr: '10.1.0.0/16'
+      dnsServiceIP: '10.1.0.10'
+      loadBalancerSku: 'standard'
+    }
+    
+    // API Server Access Profile
+    apiServerAccessProfile: {
+      enablePrivateCluster: false
+    }
+    
+    // Add-ons
+    addonProfiles: {
+      omsagent: {
+        enabled: true
+        config: {
+          logAnalyticsWorkspaceResourceID: logAnalytics.id
+        }
+      }
+      azurepolicy: {
+        enabled: false
+      }
+      httpApplicationRouting: {
+        enabled: false
+      }
+    }
+    
+    // RBAC
+    enableRBAC: true
+    
+    // Auto-upgrade channel
+    autoUpgradeProfile: {
+      upgradeChannel: environment == 'prod' ? 'stable' : 'patch'
+    }
+    
+    // Security Profile
+    securityProfile: {
+      defender: {
+        logAnalyticsWorkspaceResourceId: logAnalytics.id
+        securityMonitoring: {
+          enabled: environment == 'prod'
+        }
+      }
+    }
+  }
+}
+
+// ============================================
+// 6. RBAC Assignment for ACR Pull
+// ============================================
+resource acrPullRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(acr.id, aks.id, 'acrpull')
+  scope: acr
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d') // AcrPull role
+    principalId: aks.properties.identityProfile.kubeletidentity.objectId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// ============================================
+// 7. Outputs
+// ============================================
+output aksClusterName string = aks.name
+output aksClusterFQDN string = aks.properties.fqdn
+output aksClusterResourceId string = aks.id
+output acrName string = acr.name
+output acrLoginServer string = acr.properties.loginServer
+output logAnalyticsWorkspaceId string = logAnalytics.id
+output vnetId string = vnet.id
+output publicIPAddress string = environment != 'dev' ? publicIP.properties.ipAddress : ''
+output publicIPFQDN string = environment != 'dev' ? publicIP.properties.dnsSettings.fqdn : ''
+output kubeletIdentity string = aks.properties.identityProfile.kubeletidentity.objectId

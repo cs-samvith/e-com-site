@@ -1,0 +1,62 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ecommerce-ingress
+  namespace: ecommerce
+  annotations:
+    # Azure Application Gateway specific annotations
+    kubernetes.io/ingress.class: azure/application-gateway
+    appgw.ingress.kubernetes.io/ssl-redirect: "false"
+    appgw.ingress.kubernetes.io/connection-draining: "true"
+    appgw.ingress.kubernetes.io/connection-draining-timeout: "30"
+    # Uncomment for HTTPS redirect in production
+    # appgw.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  rules:
+    - host: ecommerce.yourdomain.com # Replace with your domain
+      http:
+        paths:
+          # Frontend - root path
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend-service
+                port:
+                  number: 3000
+          # Product Service API
+          - path: /api/products
+            pathType: Prefix
+            backend:
+              service:
+                name: product-service
+                port:
+                  number: 8081
+          # User Service API
+          - path: /api/users
+            pathType: Prefix
+            backend:
+              service:
+                name: user-service
+                port:
+                  number: 8080
+          # Health endpoints
+          - path: /api/products/health
+            pathType: Exact
+            backend:
+              service:
+                name: product-service
+                port:
+                  number: 8081
+          - path: /api/users/health
+            pathType: Exact
+            backend:
+              service:
+                name: user-service
+                port:
+                  number: 8080
+  # Uncomment for HTTPS/TLS in production
+  # tls:
+  # - hosts:
+  #   - ecommerce.yourdomain.com
+  #   secretName: ecommerce-tls-secret

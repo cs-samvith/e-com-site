@@ -1,0 +1,166 @@
+name: Deploy Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to deploy"
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      action:
+        description: "Action to perform"
+        required: true
+        type: choice
+        options:
+          - deploy
+          - destroy
+  push:
+    branches:
+      - main
+    paths:
+      - "infrastructure/bicep/**"
+      - ".github/workflows/deploy-infrastructure.yml"
+
+env:
+  AZURE_RESOURCE_GROUP_PREFIX: "rg-ecommerce-aks"
+  LOCATION: "eastus"
+
+jobs:
+  deploy-infrastructure:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set environment variables
+        run: |
+          ENV="${{ github.event.inputs.environment || 'dev' }}"
+          echo "ENVIRONMENT=$ENV" >> $GITHUB_ENV
+          echo "RESOURCE_GROUP=${{ env.AZURE_RESOURCE_GROUP_PREFIX }}-$ENV" >> $GITHUB_ENV
+          echo "DEPLOYMENT_NAME=aks-infra-$(date +%Y%m%d-%H%M%S)" >> $GITHUB_ENV
+
+      - name: Generate SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          if [ ! -f ~/.ssh/id_rsa_aks ]; then
+            ssh-keygen -t rsa -b 2048 -f ~/.ssh/id_rsa_aks -N "" -C "aks-ecommerce-github"
+          fi
+          echo "SSH_PUBLIC_KEY=$(cat ~/.ssh/id_rsa_aks.pub)" >> $GITHUB_ENV
+
+      - name: Create Resource Group
+        if: github.event.inputs.action != 'destroy'
+        run: |
+          az group create \
+            --name ${{ env.RESOURCE_GROUP }} \
+            --location ${{ env.LOCATION }}
+
+      - name: Update Parameters with SSH Key
+        if: github.event.inputs.action != 'destroy'
+        run: |
+          cd infrastructure/bicep
+          jq --arg ssh_key "$SSH_PUBLIC_KEY" \
+             '.parameters.sshPublicKey.value = $ssh_key' \
+             parameters.${{ env.ENVIRONMENT }}.json > parameters.tmp.json
+
+      - name: Validate Bicep Template
+        if: github.event.inputs.action != 'destroy'
+        run: |
+          cd infrastructure/bicep
+          az deployment group validate \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --template-file main.bicep \
+            --parameters @parameters.tmp.json
+
+      - name: Deploy Infrastructure
+        if: github.event.inputs.action != 'destroy'
+        run: |
+          cd infrastructure/bicep
+          az deployment group create \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.DEPLOYMENT_NAME }} \
+            --template-file main.bicep \
+            --parameters @parameters.tmp.json \
+            --output table
+
+      - name: Get Deployment Outputs
+        if: github.event.inputs.action != 'destroy'
+        id: outputs
+        run: |
+          AKS_NAME=$(az deployment group show \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.DEPLOYMENT_NAME }} \
+            --query 'properties.outputs.aksClusterName.value' \
+            --output tsv)
+
+          ACR_NAME=$(az deployment group show \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.DEPLOYMENT_NAME }} \
+            --query 'properties.outputs.acrName.value' \
+            --output tsv)
+
+          ACR_LOGIN_SERVER=$(az deployment group show \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.DEPLOYMENT_NAME }} \
+            --query 'properties.outputs.acrLoginServer.value' \
+            --output tsv)
+
+          echo "aks_name=$AKS_NAME" >> $GITHUB_OUTPUT
+          echo "acr_name=$ACR_NAME" >> $GITHUB_OUTPUT
+          echo "acr_login_server=$ACR_LOGIN_SERVER" >> $GITHUB_OUTPUT
+
+      - name: Save Outputs to Environment Variables
+        if: github.event.inputs.action != 'destroy'
+        run: |
+          echo "AKS_CLUSTER_NAME=${{ steps.outputs.outputs.aks_name }}" >> $GITHUB_ENV
+          echo "ACR_NAME=${{ steps.outputs.outputs.acr_name }}" >> $GITHUB_ENV
+          echo "ACR_LOGIN_SERVER=${{ steps.outputs.outputs.acr_login_server }}" >> $GITHUB_ENV
+
+      - name: Get AKS Credentials
+        if: github.event.inputs.action != 'destroy'
+        run: |
+          az aks get-credentials \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.AKS_CLUSTER_NAME }} \
+            --overwrite-existing
+
+      - name: Verify Cluster
+        if: github.event.inputs.action != 'destroy'
+        run: |
+          kubectl cluster-info
+          kubectl get nodes
+
+      - name: Destroy Infrastructure
+        if: github.event.inputs.action == 'destroy'
+        run: |
+          echo "Deleting resource group: ${{ env.RESOURCE_GROUP }}"
+          az group delete \
+            --name ${{ env.RESOURCE_GROUP }} \
+            --yes \
+            --no-wait
+
+      - name: Deployment Summary
+        if: github.event.inputs.action != 'destroy'
+        run: |
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Infrastructure deployed successfully!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ env.ENVIRONMENT }}" >> $GITHUB_STEP_SUMMARY
+          echo "**AKS Cluster:** ${{ env.AKS_CLUSTER_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "**ACR Name:** ${{ env.ACR_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "**ACR Login Server:** ${{ env.ACR_LOGIN_SERVER }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "1. Build and push Docker images" >> $GITHUB_STEP_SUMMARY
+          echo "2. Deploy applications to AKS" >> $GITHUB_STEP_SUMMARY

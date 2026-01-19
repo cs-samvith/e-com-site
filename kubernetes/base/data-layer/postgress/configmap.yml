@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init-scripts
+  namespace: ecommerce
+data:
+  init-db.sql: |
+    -- Create databases
+    CREATE DATABASE products_db;
+    CREATE DATABASE users_db;
+
+    -- Connect to products_db and create tables
+    \c products_db;
+
+    CREATE TABLE IF NOT EXISTS products (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        description TEXT,
+        price DECIMAL(10, 2) NOT NULL,
+        category VARCHAR(100),
+        inventory_count INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX idx_products_category ON products(category);
+    CREATE INDEX idx_products_price ON products(price);
+
+    -- Connect to users_db and create tables
+    \c users_db;
+
+    CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        username VARCHAR(50) UNIQUE NOT NULL,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        hashed_password VARCHAR(255) NOT NULL,
+        full_name VARCHAR(255),
+        is_active BOOLEAN DEFAULT TRUE,
+        is_admin BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX idx_users_username ON users(username);
+    CREATE INDEX idx_users_email ON users(email);

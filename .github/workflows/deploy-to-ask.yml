@@ -1,0 +1,217 @@
+name: Deploy to AKS
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to deploy"
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      image_tag:
+        description: "Image tag to deploy (default: latest)"
+        required: false
+        default: "latest"
+  workflow_run:
+    workflows: ["Build and Push Images"]
+    types:
+      - completed
+
+env:
+  AZURE_RESOURCE_GROUP_PREFIX: "rg-ecommerce-aks"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set environment variables
+        run: |
+          ENV="${{ github.event.inputs.environment || 'dev' }}"
+          IMAGE_TAG="${{ github.event.inputs.image_tag || 'latest' }}"
+          echo "ENVIRONMENT=$ENV" >> $GITHUB_ENV
+          echo "RESOURCE_GROUP=${{ env.AZURE_RESOURCE_GROUP_PREFIX }}-$ENV" >> $GITHUB_ENV
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Get AKS and ACR Info
+        id: azure_info
+        run: |
+          AKS_NAME=$(az aks list \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --query "[0].name" \
+            --output tsv)
+
+          ACR_NAME=$(az acr list \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --query "[0].name" \
+            --output tsv)
+
+          ACR_LOGIN_SERVER=$(az acr show \
+            --name $ACR_NAME \
+            --query loginServer \
+            --output tsv)
+
+          echo "aks_name=$AKS_NAME" >> $GITHUB_OUTPUT
+          echo "acr_name=$ACR_NAME" >> $GITHUB_OUTPUT
+          echo "acr_login_server=$ACR_LOGIN_SERVER" >> $GITHUB_OUTPUT
+
+      - name: Get AKS Credentials
+        run: |
+          az aks get-credentials \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ steps.azure_info.outputs.aks_name }} \
+            --overwrite-existing
+
+      - name: Update Image References in Manifests
+        run: |
+          ACR_LOGIN_SERVER="${{ steps.azure_info.outputs.acr_login_server }}"
+
+          # Update all deployment.yaml files with correct ACR
+          find kubernetes/services -name "deployment.yaml" -type f -exec sed -i \
+            "s|<YOUR_ACR>|${{ steps.azure_info.outputs.acr_name }}|g" {} +
+
+          # Update image tags
+          find kubernetes/services -name "deployment.yaml" -type f -exec sed -i \
+            "s|:latest|:${{ env.IMAGE_TAG }}|g" {} +
+
+      - name: Create Namespace
+        run: |
+          kubectl apply -f kubernetes/base/namespace.yaml
+
+      - name: Create Secrets
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          RABBITMQ_PASSWORD: ${{ secrets.RABBITMQ_PASSWORD }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+        run: |
+          # Create database secrets
+          kubectl create secret generic database-secrets \
+            --from-literal=POSTGRES_USER=postgres \
+            --from-literal=POSTGRES_PASSWORD="${POSTGRES_PASSWORD}" \
+            --from-literal=POSTGRES_HOST=postgres-service \
+            --from-literal=POSTGRES_PORT=5432 \
+            --from-literal=PRODUCT_DB_NAME=products_db \
+            --from-literal=PRODUCT_DB_USER=postgres \
+            --from-literal=PRODUCT_DB_PASSWORD="${POSTGRES_PASSWORD}" \
+            --from-literal=USER_DB_NAME=users_db \
+            --from-literal=USER_DB_USER=postgres \
+            --from-literal=USER_DB_PASSWORD="${POSTGRES_PASSWORD}" \
+            --from-literal=REDIS_HOST=redis-service \
+            --from-literal=REDIS_PORT=6379 \
+            --from-literal=RABBITMQ_HOST=rabbitmq-service \
+            --from-literal=RABBITMQ_PORT=5672 \
+            --from-literal=RABBITMQ_USER=admin \
+            --from-literal=RABBITMQ_PASSWORD="${RABBITMQ_PASSWORD}" \
+            -n ecommerce \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+          # Create JWT secrets
+          kubectl create secret generic jwt-secrets \
+            --from-literal=JWT_SECRET="${JWT_SECRET}" \
+            --from-literal=JWT_ALGORITHM=HS256 \
+            -n ecommerce \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Deploy Data Layer
+        run: |
+          kubectl apply -f kubernetes/data-layer/postgres/
+          kubectl apply -f kubernetes/data-layer/redis/
+          kubectl apply -f kubernetes/data-layer/rabbitmq/
+
+      - name: Wait for Data Layer
+        run: |
+          echo "Waiting for PostgreSQL..."
+          kubectl wait --for=condition=ready pod -l app=postgres -n ecommerce --timeout=300s || true
+
+          echo "Waiting for Redis..."
+          kubectl wait --for=condition=ready pod -l app=redis -n ecommerce --timeout=120s || true
+
+          echo "Waiting for RabbitMQ..."
+          kubectl wait --for=condition=ready pod -l app=rabbitmq -n ecommerce --timeout=300s || true
+
+      - name: Deploy Microservices
+        run: |
+          kubectl apply -f kubernetes/services/product-service/
+          kubectl apply -f kubernetes/services/user-service/
+          kubectl apply -f kubernetes/services/frontend-service/
+
+      - name: Wait for Services
+        run: |
+          echo "Waiting for services to be ready..."
+          kubectl wait --for=condition=ready pod -l app=product-service -n ecommerce --timeout=300s || true
+          kubectl wait --for=condition=ready pod -l app=user-service -n ecommerce --timeout=300s || true
+          kubectl wait --for=condition=ready pod -l app=frontend-service -n ecommerce --timeout=300s || true
+
+      - name: Deploy Ingress
+        run: |
+          kubectl apply -f kubernetes/ingress/
+
+      - name: Get Service Status
+        run: |
+          echo "=== Pods ==="
+          kubectl get pods -n ecommerce
+          echo ""
+          echo "=== Services ==="
+          kubectl get svc -n ecommerce
+          echo ""
+          echo "=== Ingress ==="
+          kubectl get ingress -n ecommerce
+
+      - name: Get Application URL
+        id: app_url
+        run: |
+          # Wait for ingress IP
+          for i in {1..30}; do
+            INGRESS_IP=$(kubectl get ingress ecommerce-ingress -n ecommerce -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+            if [ -n "$INGRESS_IP" ]; then
+              echo "ingress_ip=$INGRESS_IP" >> $GITHUB_OUTPUT
+              break
+            fi
+            echo "Waiting for ingress IP... ($i/30)"
+            sleep 10
+          done
+
+      - name: Deployment Summary
+        run: |
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Application deployed successfully!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ env.ENVIRONMENT }}" >> $GITHUB_STEP_SUMMARY
+          echo "**AKS Cluster:** ${{ steps.azure_info.outputs.aks_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Image Tag:** ${{ env.IMAGE_TAG }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Ingress IP:** ${{ steps.app_url.outputs.ingress_ip || 'Pending...' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Access Application" >> $GITHUB_STEP_SUMMARY
+          echo "- Frontend: http://${{ steps.app_url.outputs.ingress_ip }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Product API: http://${{ steps.app_url.outputs.ingress_ip }}/api/products" >> $GITHUB_STEP_SUMMARY
+          echo "- User API: http://${{ steps.app_url.outputs.ingress_ip }}/api/users" >> $GITHUB_STEP_SUMMARY
+
+      - name: Run Health Checks
+        continue-on-error: true
+        run: |
+          echo "Running health checks..."
+          INGRESS_IP="${{ steps.app_url.outputs.ingress_ip }}"
+
+          if [ -n "$INGRESS_IP" ]; then
+            echo "Testing Product Service..."
+            curl -f http://$INGRESS_IP/api/products/health || echo "Product service not ready"
+            
+            echo "Testing User Service..."
+            curl -f http://$INGRESS_IP/api/users/health || echo "User service not ready"
+          else
+            echo "Ingress IP not available yet"
+          fi
