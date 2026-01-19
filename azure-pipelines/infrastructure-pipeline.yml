@@ -54,6 +54,28 @@ stages:
           vmImage: "ubuntu-latest"
         steps:
           - task: AzureCLI@2
+            displayName: "Check Existing Cluster"
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                echo "Checking for existing AKS cluster..."
+
+                if az aks show --resource-group $(resourceGroup) --name aks-ecommerce-${{ parameters.environment }} &> /dev/null; then
+                  echo "##vso[task.logissue type=warning]⚠️ AKS cluster already exists!"
+                  echo "##vso[task.logissue type=warning]Cannot change SSH keys on existing cluster"
+                  echo "##vso[task.setvariable variable=clusterExists;isOutput=true]true"
+                  
+                  # Get cluster status
+                  STATUS=$(az aks show --resource-group $(resourceGroup) --name aks-ecommerce-${{ parameters.environment }} --query provisioningState -o tsv)
+                  echo "Existing cluster status: $STATUS"
+                else
+                  echo "✅ No existing cluster found - safe to deploy"
+                  echo "##vso[task.setvariable variable=clusterExists;isOutput=true]false"
+                fi
+
+          - task: AzureCLI@2
             displayName: "Register Resource Providers"
             inputs:
               azureSubscription: $(azureServiceConnection)
