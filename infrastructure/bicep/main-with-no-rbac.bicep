@@ -1,5 +1,5 @@
 // Main Bicep template for E-Commerce AKS Infrastructure
-// Minimal capacity for running the microservices workload
+// Version WITHOUT automatic role assignment (for limited permissions)
 
 @description('The location for all resources')
 param location string = resourceGroup().location
@@ -225,35 +225,30 @@ resource aks 'Microsoft.ContainerService/managedClusters@2023-10-01' = {
 }
 
 // ============================================
-// 6. RBAC Assignment for ACR Pull
-// ============================================
-// Note: This requires 'User Access Administrator' or 'Owner' role
-// If you get permission errors, comment this out and assign manually:
-// az role assignment create --assignee <kubelet-identity-object-id> --role AcrPull --scope <acr-resource-id>
-
-resource acrPullRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(acr.id, aks.id, 'acrpull')
-  scope: acr
-  properties: {
-    roleDefinitionId: subscriptionResourceId(
-      'Microsoft.Authorization/roleDefinitions',
-      '7f951dda-4ed3-4680-a7ca-43fe172d538d'
-    ) // AcrPull role
-    principalId: aks.properties.identityProfile.kubeletidentity.objectId
-    principalType: 'ServicePrincipal'
-  }
-}
-
-// ============================================
-// 7. Outputs
+// 6. Outputs
 // ============================================
 output aksClusterName string = aks.name
 output aksClusterFQDN string = aks.properties.fqdn
 output aksClusterResourceId string = aks.id
 output acrName string = acr.name
 output acrLoginServer string = acr.properties.loginServer
+output acrResourceId string = acr.id
 output logAnalyticsWorkspaceId string = logAnalytics.id
 output vnetId string = vnet.id
 output publicIPAddress string = environment != 'dev' ? publicIP.properties.ipAddress : 'N/A'
 output publicIPFQDN string = environment != 'dev' ? publicIP.properties.dnsSettings.fqdn : 'N/A'
 output kubeletIdentity string = aks.properties.identityProfile.kubeletidentity.objectId
+
+// ============================================
+// IMPORTANT: Manual Step Required
+// ============================================
+// After deployment, run this command to assign ACR pull permissions:
+// 
+// az role assignment create \
+//   --assignee <kubelet-identity-object-id> \
+//   --role AcrPull \
+//   --scope <acr-resource-id>
+//
+// Or use the provided scripts:
+// - Linux/Mac: ./fix-acr-permissions.sh dev
+// - Windows: .\fix-acr-permissions.ps1 -Environment dev
