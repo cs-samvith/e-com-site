@@ -1,13 +1,14 @@
-trigger: none # Manual or triggered by build
+trigger: none # Manual trigger only
 
-resources:
-  pipelines:
-    - pipeline: buildPipeline
-      source: "Build and Push Images" # Name of your build pipeline
-      trigger:
-        branches:
-          include:
-            - main
+# Uncomment and configure after creating the build pipeline
+# resources:
+#   pipelines:
+#     - pipeline: buildPipeline
+#       source: 'Build and Push Images'  # Must match exact pipeline name in Azure DevOps
+#       trigger:
+#         branches:
+#           include:
+#             - main
 
 parameters:
   - name: environment

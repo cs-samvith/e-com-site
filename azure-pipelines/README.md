@@ -1,71 +1,24 @@
-# Azure DevOps CI/CD Pipelines
+# Azure DevOps Pipelines - Complete Guide
 
-This directory contains Azure DevOps YAML pipelines for deploying the e-commerce microservices to Azure Kubernetes Service (AKS).
+This directory contains all Azure DevOps YAML pipelines for the e-commerce microservices project.
 
 ---
 
-## 📁 Pipelines
+## 📁 Files
 
-### 1. **infrastructure-pipeline.yml**
-
-Deploys Azure infrastructure using Bicep templates.
-
-**Triggers:**
-
-- Push to `main` branch (infrastructure changes)
-- Manual run
-
-**Stages:**
-
-- Validate: Validates Bicep template
-- Deploy: Deploys AKS, ACR, networking
-- Destroy: Deletes infrastructure (requires manual approval)
-
-### 2. **build-and-push-pipeline.yml**
-
-Builds Docker images and pushes to ACR.
-
-**Triggers:**
-
-- Push to `main` branch (service code changes)
-- Manual run
-
-**Stages:**
-
-- Build: Builds Docker images for all services
-- Publish: Publishes build artifacts
-
-### 3. **deploy-to-aks-pipeline.yml**
-
-Deploys applications to AKS cluster.
-
-**Triggers:**
-
-- Manual run only
-
-**Stages:**
-
-- PreDeploy: Validates cluster
-- DeployDataLayer: Deploys PostgreSQL, Redis, RabbitMQ
-- DeployServices: Deploys microservices
-- ConfigureIngress: Configures ingress
-- HealthCheck: Verifies deployment
+| File                          | Purpose                   | Trigger                      |
+| ----------------------------- | ------------------------- | ---------------------------- |
+| `infrastructure-pipeline.yml` | Deploy AKS infrastructure | Manual only                  |
+| `build-and-push-pipeline.yml` | Build Docker images       | Code changes in `services/*` |
+| `deploy-to-aks-pipeline.yml`  | Deploy to Kubernetes      | Manual or after build        |
 
 ---
 
 ## 🚀 Setup Instructions
 
-### Step 1: Create Azure DevOps Project
+### Step 1: Create Service Connection
 
-1. Go to https://dev.azure.com
-2. Create a new project: "ecommerce-aks"
-3. Enable pipelines
-
-### Step 2: Create Service Connection
-
-#### Azure Resource Manager Connection
-
-1. Project Settings → Service connections
+1. Go to Azure DevOps → Project Settings → Service connections
 2. Click "New service connection"
 3. Select "Azure Resource Manager"
 4. Select "Service principal (automatic)"
@@ -73,368 +26,310 @@ Deploys applications to AKS cluster.
 6. Name it: `azure-ecommerce-sp`
 7. Click "Save"
 
-#### Docker Registry Connection (ACR)
+### Step 2: Create Variable Group
 
-1. After infrastructure is deployed, create ACR connection
-2. Project Settings → Service connections
-3. Click "New service connection"
-4. Select "Docker Registry"
-5. Select "Azure Container Registry"
-6. Choose your ACR
-7. Name it: `acr-ecommerce`
-8. Click "Save"
+1. Go to Pipelines → Library → Variable groups
+2. Click "+ Variable group"
+3. Name: `ecommerce-secrets`
+4. Add these variables:
 
-### Step 3: Create Pipeline Variables
+| Variable            | Value                                    | Secret? |
+| ------------------- | ---------------------------------------- | ------- |
+| `POSTGRES_PASSWORD` | Generate with: `openssl rand -base64 32` | ✅ Yes  |
+| `RABBITMQ_PASSWORD` | Generate with: `openssl rand -base64 32` | ✅ Yes  |
+| `JWT_SECRET`        | Generate with: `openssl rand -base64 32` | ✅ Yes  |
 
-Go to Pipelines → Library → Variable groups
+5. Click "Save"
 
-Create a variable group: **ecommerce-secrets**
+### Step 3: Create Environments
 
-Add these variables:
+1. Go to Pipelines → Environments
+2. Create three environments:
+   - **dev** (no approvals)
+   - **staging** (1 approver)
+   - **prod** (2 approvers)
 
-| Variable            | Value                    | Secret? |
-| ------------------- | ------------------------ | ------- |
-| `POSTGRES_PASSWORD` | Generate strong password | ✅ Yes  |
-| `RABBITMQ_PASSWORD` | Generate strong password | ✅ Yes  |
-| `JWT_SECRET`        | Generate strong password | ✅ Yes  |
+### Step 4: Import Pipelines
 
-**Generate secure passwords:**
+For each pipeline file:
 
-```bash
-# Using openssl
-openssl rand -base64 32
+1. Go to Pipelines → Pipelines
+2. Click "New pipeline"
+3. Select "Azure Repos Git" (or GitHub)
+4. Select your repository
+5. Choose "Existing Azure Pipelines YAML file"
+6. Select the file:
+   - `/azure-pipelines/infrastructure-pipeline.yml`
+   - `/azure-pipelines/build-and-push-pipeline.yml`
+   - `/azure-pipelines/deploy-to-aks-pipeline.yml`
+7. Click "Continue"
+8. Click "Save" (don't run yet)
 
-# Using PowerShell
--join ((48..57) + (65..90) + (97..122) | Get-Random -Count 32 | ForEach-Object {[char]$_})
-```
+### Step 5: Rename Pipelines
 
-### Step 4: Link Variable Group to Pipelines
+After creating each pipeline:
 
-In each pipeline YAML, add at the top:
+1. Click the three dots (⋯) → Rename/move
+2. Rename to:
+   - "Deploy Infrastructure"
+   - "Build and Push Images"
+   - "Deploy to AKS"
+3. Click "Save"
+
+### Step 6: Configure Pipeline Triggers (Optional)
+
+To make the Deploy pipeline auto-trigger after Build:
+
+1. Open `azure-pipelines/deploy-to-aks-pipeline.yml`
+2. Find the commented `resources` section at the top
+3. Uncomment it
+4. Update the `source` value to match your build pipeline name exactly
+5. Commit and push
+
+Example:
 
 ```yaml
-variables:
-  - group: ecommerce-secrets
+resources:
+  pipelines:
+    - pipeline: buildPipeline
+      source: "Build and Push Images" # Must match exactly
+      trigger:
+        branches:
+          include:
+            - main
 ```
 
-### Step 5: Create Environments
-
-Go to Pipelines → Environments
-
-Create three environments:
-
-- **dev** (no approvals)
-- **staging** (1 approver required)
-- **prod** (2 approvers required)
-
 ---
 
-## 📋 Running Pipelines
-
-### 1. Deploy Infrastructure
-
-1. Go to Pipelines
-2. Select "infrastructure-pipeline"
-3. Click "Run pipeline"
-4. Set parameters:
-   - Environment: `dev`
-   - Action: `deploy`
-5. Click "Run"
-
-⏱️ Takes ~15 minutes
-
-### 2. Build and Push Images
-
-1. Go to Pipelines
-2. Select "build-and-push-pipeline"
-3. Click "Run pipeline"
-4. Set parameters:
-   - Environment: `dev`
-5. Click "Run"
-
-⏱️ Takes ~5-10 minutes
-
-### 3. Deploy to AKS
-
-1. Go to Pipelines
-2. Select "deploy-to-aks-pipeline"
-3. Click "Run pipeline"
-4. Set parameters:
-   - Environment: `dev`
-   - Image Tag: `latest` (or specific build number)
-5. Click "Run"
-
-⏱️ Takes ~10-15 minutes
-
----
-
-## 🔄 Complete Workflow
+## 🎯 Usage Workflow
 
 ### First Time Setup
 
 ```
-1. Infrastructure Pipeline (manual)
-   ↓
-2. Build Pipeline (manual)
-   ↓
-3. Deploy Pipeline (manual)
+Step 1: Deploy Infrastructure (ONCE)
+  └─ Run: "Deploy Infrastructure" pipeline
+  └─ Takes: 10-15 minutes
+  └─ Creates: AKS cluster, ACR, networking
+
+Step 2: Build Images (ONCE)
+  └─ Run: "Build and Push Images" pipeline
+  └─ Takes: 5-10 minutes
+  └─ Creates: Docker images in ACR
+
+Step 3: Deploy Applications (ONCE)
+  └─ Run: "Deploy to AKS" pipeline
+  └─ Takes: 5-10 minutes
+  └─ Deploys: All services to Kubernetes
 ```
 
-### Continuous Deployment
-
-After initial setup, pushes to `main` automatically trigger:
+### Development Workflow
 
 ```
-Code Push → Build Pipeline → (manual approval) → Deploy Pipeline
+Day 1: Infrastructure deployed ✅
+
+Day 2-N: Code changes
+  1. Edit code in services/
+  2. Commit and push
+  3. "Build and Push Images" runs automatically ✅
+  4. "Deploy to AKS" runs automatically ✅
+  5. Application updated! 🎉
 ```
 
 ---
 
-## 📊 Pipeline Configuration
+## 📋 Pipeline Details
 
-### Infrastructure Pipeline
+### 1. Infrastructure Pipeline
 
-```yaml
-# infrastructure-pipeline.yml
-trigger:
-  branches:
-    include:
-      - main
-  paths:
-    include:
-      - infrastructure/bicep/*
+**When to run:**
 
-parameters:
-  - name: environment
-    values:
-      - dev
-      - staging
-      - prod
-  - name: action
-    values:
-      - deploy
-      - destroy
-```
+- ❌ Don't run if cluster already exists
+- ✅ Run once to create initial infrastructure
+- ✅ Run when changing cluster configuration
 
-### Build Pipeline
+**What it does:**
 
-```yaml
-# build-and-push-pipeline.yml
-trigger:
-  branches:
-    include:
-      - main
-  paths:
-    include:
-      - services/*
+1. Checks if cluster already exists
+2. Registers Azure providers
+3. Validates Bicep template
+4. Deploys AKS cluster
+5. Configures ACR permissions
 
-parameters:
-  - name: environment
-    values:
-      - dev
-      - staging
-      - prod
-```
+**Parameters:**
 
-### Deploy Pipeline
+- `environment`: dev/staging/prod
+- `action`: deploy/destroy
 
-```yaml
-# deploy-to-aks-pipeline.yml
-trigger: none # Manual only
+### 2. Build and Push Pipeline
 
-parameters:
-  - name: environment
-    values:
-      - dev
-      - staging
-      - prod
-  - name: imageTag
-    default: "latest"
-```
+**When to run:**
+
+- ✅ Automatically on code changes
+- ✅ Manually when needed
+
+**What it does:**
+
+1. Builds Docker images using `az acr build`
+2. Tags images with build number + latest
+3. Pushes to Azure Container Registry
+4. Verifies images
+
+**Parameters:**
+
+- `environment`: dev/staging/prod
+- `services`: Which services to build
+
+### 3. Deploy to AKS Pipeline
+
+**When to run:**
+
+- ✅ Automatically after successful build
+- ✅ Manually to update applications
+
+**What it does:**
+
+1. Validates cluster health
+2. Deploys data layer (PostgreSQL, Redis, RabbitMQ)
+3. Deploys microservices
+4. Configures ingress
+5. Runs health checks
+
+**Parameters:**
+
+- `environment`: dev/staging/prod
+- `imageTag`: Which image version to deploy
 
 ---
 
 ## 🔐 Security Best Practices
 
+### Variable Groups
+
+- ✅ Use variable groups for secrets
+- ✅ Mark sensitive values as "Secret"
+- ✅ Rotate secrets regularly
+- ❌ Never commit secrets to repository
+
 ### Service Connections
 
-✅ **DO:**
+- ✅ Use managed identities when possible
+- ✅ Limit scope to specific resource groups
+- ✅ Create separate connections per environment
+- ❌ Don't use personal accounts
 
-- Use managed identities when possible
-- Limit scope to specific resource groups
-- Create separate connections per environment
-- Regularly review and rotate credentials
+### Environments
 
-❌ **DON'T:**
-
-- Use personal accounts
-- Share service principals across projects
-- Grant subscription-level permissions unnecessarily
-
-### Secrets Management
-
-✅ **DO:**
-
-- Store all secrets in Azure Key Vault or Pipeline Variables
-- Mark variables as "Secret"
-- Use variable groups
-- Rotate secrets regularly
-
-❌ **DON'T:**
-
-- Commit secrets to repository
-- Log secret values
-- Share secrets via email/chat
+- ✅ Require approvals for production
+- ✅ Use environment-specific secrets
+- ✅ Configure deployment gates
+- ❌ Don't bypass approvals
 
 ---
 
 ## 🐛 Troubleshooting
 
-### Pipeline Fails: "Service connection not found"
+### Pipeline fails: "Service connection not found"
 
 **Solution:**
 
 1. Go to Project Settings → Service connections
-2. Verify connection name matches YAML (`azure-ecommerce-sp`)
-3. Test connection
+2. Verify connection name is exactly: `azure-ecommerce-sp`
+3. Test the connection
 4. Grant access to all pipelines
 
-### Pipeline Fails: "Insufficient permissions"
+### Pipeline fails: "AKS cluster not found"
 
 **Solution:**
 
-```bash
-# Get service principal ID
-$spId = az ad sp list --display-name "azure-ecommerce-sp" --query "[0].id" -o tsv
+1. Check if infrastructure pipeline completed successfully
+2. Verify resource group exists
+3. Run infrastructure pipeline if needed
 
-# Grant Contributor role
-az role assignment create \
-  --assignee $spId \
-  --role Contributor \
-  --scope /subscriptions/<SUBSCRIPTION_ID>
-```
-
-### Cannot Push to ACR
+### Pipeline fails: "Secrets not found"
 
 **Solution:**
 
-1. Verify ACR service connection is created
-2. Check ACR connection is selected in Docker@2 tasks
-3. Verify AKS has AcrPull role on ACR
+1. Go to Pipelines → Library
+2. Verify variable group "ecommerce-secrets" exists
+3. Verify all three secrets are defined
+4. Link variable group to pipeline
 
-### Secrets Not Found
-
-**Solution:**
-
-1. Verify variable group "ecommerce-secrets" exists
-2. Check variables are marked as secret
-3. Verify pipeline references variable group:
-
-```yaml
-variables:
-  - group: ecommerce-secrets
-```
-
-### Deployment Stuck
+### Images fail to build
 
 **Solution:**
 
-```bash
-# Check pod status
-kubectl get pods -n ecommerce
+1. Check ACR exists in resource group
+2. Verify Dockerfile syntax
+3. Check service connection permissions
 
-# View pod logs
-kubectl logs <POD_NAME> -n ecommerce
+### Deployment fails: "ControlPlaneNotFound"
 
-# Describe pod
-kubectl describe pod <POD_NAME> -n ecommerce
-```
+**Solution:**
+
+- Cluster is in broken state
+- Delete resource group and redeploy infrastructure
 
 ---
 
-## 📈 Pipeline Monitoring
+## 📊 Pipeline Monitoring
 
 ### View Pipeline Runs
 
-1. Go to Pipelines
-2. Select pipeline
-3. Click on run number
-4. View stages, jobs, and logs
+1. Go to Pipelines → Pipelines
+2. Click on pipeline name
+3. View run history
 
-### Pipeline Analytics
+### View Logs
 
-1. Go to Pipelines → Analytics
-2. View metrics:
-   - Success rate
-   - Duration trends
-   - Failure reasons
+1. Click on a pipeline run
+2. Click on stage/job
+3. View detailed logs
 
-### Enable Notifications
+### Cancel Running Pipeline
 
-1. Project Settings → Notifications
-2. Create subscription for:
-   - Build completed
-   - Release deployment failed
-   - Release deployment succeeded
+1. Open running pipeline
+2. Click three dots (⋯)
+3. Click "Cancel"
 
 ---
 
-## 🔄 Rollback Strategy
+## 🔄 Updating Pipelines
 
-### Rollback to Previous Build
+### Modify Pipeline YAML
 
-1. Go to Pipelines → deploy-to-aks-pipeline
-2. Click "Run pipeline"
-3. Set Image Tag to previous build number
-4. Run deployment
+1. Edit the YAML file in repository
+2. Commit and push
+3. Pipeline automatically uses new version
 
-### Manual Kubectl Rollback
+### Test Pipeline Changes
 
-```bash
-# Connect to cluster
-az aks get-credentials --resource-group rg-ecommerce-aks-dev --name aks-ecommerce-dev
-
-# Rollback deployments
-kubectl rollout undo deployment/product-service -n ecommerce
-kubectl rollout undo deployment/user-service -n ecommerce
-kubectl rollout undo deployment/frontend-service -n ecommerce
-
-# Check rollout status
-kubectl rollout status deployment/product-service -n ecommerce
-```
+1. Create a feature branch
+2. Modify pipeline YAML
+3. Trigger pipeline from feature branch
+4. Merge to main when tested
 
 ---
 
-## 📚 Additional Resources
+## 📈 Best Practices
 
-- [Azure Pipelines Documentation](https://docs.microsoft.com/en-us/azure/devops/pipelines/)
-- [YAML Schema Reference](https://docs.microsoft.com/en-us/azure/devops/pipelines/yaml-schema)
-- [Azure CLI Reference](https://docs.microsoft.com/en-us/cli/azure/)
+### Infrastructure Pipeline
 
----
+- ✅ Run manually, not on every commit
+- ✅ Add approval gates for production
+- ✅ Document infrastructure changes
 
-## 🎯 Best Practices
+### Build Pipeline
 
-### Pipeline Organization
+- ✅ Auto-trigger on code changes
+- ✅ Build only changed services if possible
+- ✅ Tag images with build number
 
-- One pipeline per concern (infra, build, deploy)
-- Use stages for logical grouping
-- Implement approval gates for production
-- Use templates for reusable components
+### Deploy Pipeline
 
-### Build Optimization
-
-- Use Docker layer caching
-- Build only changed services
-- Run tests in parallel
-- Cache dependencies
-
-### Deployment Strategy
-
-- Deploy to dev automatically
-- Require approval for staging/prod
-- Use canary or blue-green for production
-- Always have rollback plan
+- ✅ Deploy automatically to dev
+- ✅ Require approval for staging/prod
+- ✅ Use health checks
+- ✅ Keep rollback capability
 
 ---
 
@@ -442,15 +337,22 @@ kubectl rollout status deployment/product-service -n ecommerce
 
 Before running pipelines:
 
-- [ ] Azure DevOps project created
-- [ ] Service connections configured
-- [ ] Variable group created with secrets
-- [ ] Environments created (dev/staging/prod)
-- [ ] Pipelines imported from YAML
+- [ ] Service connection created (`azure-ecommerce-sp`)
+- [ ] Variable group created (`ecommerce-secrets`)
+- [ ] All three secrets added to variable group
+- [ ] Environments created (dev, staging, prod)
+- [ ] All three pipelines imported
+- [ ] Pipelines renamed for clarity
 - [ ] Variable groups linked to pipelines
-- [ ] Approval gates configured
-- [ ] Notifications enabled
 
 ---
 
-Happy deploying with Azure DevOps! 🚀
+## 🎓 Additional Resources
+
+- [Azure Pipelines Documentation](https://docs.microsoft.com/en-us/azure/devops/pipelines/)
+- [YAML Schema Reference](https://docs.microsoft.com/en-us/azure/devops/pipelines/yaml-schema)
+- [Azure CLI Reference](https://docs.microsoft.com/en-us/cli/azure/)
+
+---
+
+Happy deploying! 🚀
