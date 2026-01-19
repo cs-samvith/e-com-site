@@ -214,12 +214,18 @@ resource aks 'Microsoft.ContainerService/managedClusters@2023-10-01' = {
 
     // Security Profile
     securityProfile: {
-      defender: {
-        logAnalyticsWorkspaceResourceId: logAnalytics.id
-        securityMonitoring: {
-          enabled: environment == 'prod'
-        }
-      }
+      defender: environment == 'prod'
+        ? {
+            logAnalyticsWorkspaceResourceId: logAnalytics.id
+            securityMonitoring: {
+              enabled: true
+            }
+          }
+        : {
+            securityMonitoring: {
+              enabled: false
+            }
+          }
     }
   }
 }
