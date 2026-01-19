@@ -181,6 +181,40 @@ linuxProfile: {
 
 ---
 
+## 🌐 Error: Invalid Subnet Resource ID
+
+### Error Message
+
+```
+InvalidSubnetSourceID: '[reference(resourceId('Microsoft.Network/virtualNetworks', variables('vnetName')), '2023-05-01').subnets[0].id]' is not a valid vnet subnet ResourceID
+```
+
+### Cause
+
+The Bicep template is using an incorrect method to reference the subnet ID. Using `.properties.subnets[0].id` or `reference()` function creates a circular dependency or invalid reference.
+
+### Solution
+
+✅ **Already Fixed!** The updated templates now use the correct `resourceId()` function:
+
+```bicep
+// Before (caused error)
+vnetSubnetID: vnet.properties.subnets[0].id
+
+// After (fixed)
+vnetSubnetID: resourceId('Microsoft.Network/virtualNetworks/subnets', vnetName, 'aks-subnet')
+```
+
+**Additional fixes:**
+
+- Added explicit `dependsOn: [vnet]` to AKS cluster resource
+- Fixed output expressions to use `reference()` function correctly
+
+**If you're using an older template:**
+Update to the latest `main.bicep` or `main-no-rbac.bicep` from the repository.
+
+---
+
 ## ⚠️ Warning: BCP318 - Value May Be Null
 
 ### Warning Message

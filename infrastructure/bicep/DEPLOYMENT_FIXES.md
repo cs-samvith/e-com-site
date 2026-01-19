@@ -6,7 +6,52 @@ This document contains all the fixes applied to resolve deployment errors.
 
 ## ✅ Issues Fixed
 
-### **Issue 1: MissingSubscriptionRegistration**
+### **Issue 1: Invalid Subnet Resource ID**
+
+**Error:**
+
+```
+InvalidSubnetSourceID: '[reference(resourceId('Microsoft.Network/virtualNetworks', variables('vnetName')), '2023-05-01').subnets[0].id]' is not a valid vnet subnet ResourceID
+```
+
+**Root Cause:** Using `vnet.properties.subnets[0].id` creates an invalid reference in Bicep. The subnet ID must be constructed using the `resourceId()` function.
+
+**Fix Applied:**
+
+```bicep
+// Before (caused error)
+agentPoolProfiles: [
+  {
+    vnetSubnetID: vnet.properties.subnets[0].id  // ❌ Invalid reference
+  }
+]
+
+// After (fixed)
+agentPoolProfiles: [
+  {
+    vnetSubnetID: resourceId('Microsoft.Network/virtualNetworks/subnets', vnetName, 'aks-subnet')  // ✅ Correct
+  }
+]
+```
+
+**Additional fixes:**
+
+- Added explicit `dependsOn: [vnet]` to ensure VNet is created first
+- Fixed output expressions to use `reference()` function properly
+- Fixed BCP318 warnings for publicIP references
+
+**How to Apply:**
+Templates are already fixed. If you have an older version:
+
+```bash
+cd infrastructure/bicep
+chmod +x patch-templates.sh
+./patch-templates.sh
+```
+
+---
+
+### **Issue 2: MissingSubscriptionRegistration**
 
 **Error:**
 
