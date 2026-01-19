@@ -34,7 +34,7 @@ parameters:
 
 variables:
   - name: azureServiceConnection
-    value: "azure-ecommerce-sp"
+    value: "ARM_SERVICE_CONNECTION"
   - name: location
     value: "eastus"
   - name: resourceGroupPrefix
