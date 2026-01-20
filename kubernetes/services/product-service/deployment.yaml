@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: product-service
-          image: <YOUR_REGISTRY>/product-service:latest
+          image: acrecommercedev.azurecr.io/product-service:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 8081

@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: frontend-service
-          image: <YOUR_ACR>.azurecr.io/frontend-service:latest
+          image: acrecommercedev.azurecr.io/frontend-service:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 3000
