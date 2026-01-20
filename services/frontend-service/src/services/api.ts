@@ -3,7 +3,7 @@ import { authUtils } from '@/utils/auth';
 
 // Create axios instance
 const api: AxiosInstance = axios.create({
-  baseURL: typeof window !== 'undefined' ? '' : 'http://localhost:3000',
+  baseURL: '/api',  // Always use /api - works for both local and production
   headers: {
     'Content-Type': 'application/json',
   },
