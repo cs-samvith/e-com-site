@@ -3,85 +3,51 @@ import { User, UserRegister, UserLogin, AuthToken, PasswordUpdate } from '@/type
 import { authUtils } from '@/utils/auth';
 
 export const userService = {
-  /**
-   * Register new user
-   */
   register: async (userData: UserRegister): Promise<User> => {
-    const response = await api.post('/api/users/register', userData);
+    const response = await api.post('/users/register', userData);  // Removed /api
     return response.data;
   },
 
-  /**
-   * Login user
-   */
   login: async (credentials: UserLogin): Promise<AuthToken> => {
-    const response = await api.post('/api/users/login', credentials);
+    const response = await api.post('/users/login', credentials);  // Removed /api
     const token = response.data;
-    
-    // Store token
     authUtils.setToken(token.access_token);
-    
     return token;
   },
 
-  /**
-   * Logout user
-   */
   logout: async (): Promise<void> => {
     try {
-      await api.post('/api/users/logout');
+      await api.post('/users/logout');  // Removed /api
     } finally {
-      // Clear local auth data regardless of API call result
       authUtils.clearAuth();
     }
   },
 
-  /**
-   * Get current user profile
-   */
   getProfile: async (): Promise<User> => {
-    const response = await api.get('/api/users/profile');
+    const response = await api.get('/users/profile');  // Removed /api
     const user = response.data;
-    
-    // Store user data
     authUtils.setUser(user);
-    
     return user;
   },
 
-  /**
-   * Update user profile
-   */
   updateProfile: async (updates: Partial<User>): Promise<User> => {
-    const response = await api.put('/api/users/profile', updates);
+    const response = await api.put('/users/profile', updates);  // Removed /api
     const user = response.data;
-    
-    // Update stored user data
     authUtils.setUser(user);
-    
     return user;
   },
 
-  /**
-   * Change password
-   */
   changePassword: async (passwordData: PasswordUpdate): Promise<void> => {
-    await api.put('/api/users/password', passwordData);
+    await api.put('/users/password', passwordData);  // Removed /api
   },
 
-  /**
-   * Get all users (admin endpoint)
-   */
   getUsers: async (limit = 100, offset = 0): Promise<User[]> => {
-    const response = await api.get(`/api/users?limit=${limit}&offset=${offset}`);
+    const response = await api.get(`/users?limit=${limit}&offset=${offset}`);  // Removed /api
     return response.data;
   },
 
-  /**
-   * Get user by ID
-   */
   getUser: async (id: string): Promise<User> => {
-    const response = await api.get(`/api/users/${id}`);
+    const response = await api.get(`/users/${id}`);  // Removed /api
     return response.data;
   },
 };

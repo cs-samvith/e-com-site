@@ -6,7 +6,7 @@ export const productService = {
    * Get all products
    */
   getProducts: async (limit = 100, offset = 0): Promise<Product[]> => {
-    const response = await api.get(`/api/products?limit=${limit}&offset=${offset}`);
+    const response = await api.get(`/products?limit=${limit}&offset=${offset}`);  // Remove /api
     return response.data;
   },
 
@@ -14,7 +14,7 @@ export const productService = {
    * Get single product by ID
    */
   getProduct: async (id: string): Promise<Product> => {
-    const response = await api.get(`/api/products/${id}`);
+    const response = await api.get(`/products/${id}`);  // Remove /api
     return response.data;
   },
 
@@ -22,7 +22,7 @@ export const productService = {
    * Search products
    */
   searchProducts: async (query: string): Promise<Product[]> => {
-    const response = await api.get(`/api/products/search/?q=${encodeURIComponent(query)}`);
+    const response = await api.get(`/products/search/?q=${encodeURIComponent(query)}`);  // Remove /api
     return response.data;
   },
 
@@ -30,7 +30,7 @@ export const productService = {
    * Create new product (admin only)
    */
   createProduct: async (product: ProductCreate): Promise<Product> => {
-    const response = await api.post('/api/products', product);
+    const response = await api.post('/products', product);  // Remove /api
     return response.data;
   },
 
@@ -38,7 +38,7 @@ export const productService = {
    * Update product (admin only)
    */
   updateProduct: async (id: string, updates: Partial<ProductCreate>): Promise<Product> => {
-    const response = await api.put(`/api/products/${id}`, updates);
+    const response = await api.put(`/products/${id}`, updates);  // Remove /api
     return response.data;
   },
 
@@ -46,14 +46,14 @@ export const productService = {
    * Delete product (admin only)
    */
   deleteProduct: async (id: string): Promise<void> => {
-    await api.delete(`/api/products/${id}`);
+    await api.delete(`/products/${id}`);  // Remove /api
   },
 
   /**
    * Get product inventory
    */
   getInventory: async (id: string): Promise<{ product_id: string; inventory_count: number }> => {
-    const response = await api.get(`/api/products/${id}/inventory`);
+    const response = await api.get(`/products/${id}/inventory`);  // Remove /api
     return response.data;
   },
 };
