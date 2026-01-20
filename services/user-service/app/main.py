@@ -8,6 +8,7 @@ from app.models import (
 from app.config import settings
 from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi.responses import Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import List, Optional
 from uuid import UUID
@@ -174,6 +175,15 @@ async def shutdown_event():
     """Cleanup on shutdown"""
     logger.info("Shutting down...")
     queue_publisher.close()
+
+# Add CORS middleware - MUST be before routes
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, specify your domain
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/")

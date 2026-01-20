@@ -6,23 +6,18 @@ export const productService = {
    * Get all products
    */
   getProducts: async (limit = 100, offset = 0): Promise<Product[]> => {
-    const response = await api.get(`/products?limit=${limit}&offset=${offset}`);  // Remove /api
+    // Since api.ts has baseURL: '/api', just use /products
+    const response = await api.get(`/products`);
     return response.data;
   },
 
-  /**
-   * Get single product by ID
-   */
   getProduct: async (id: string): Promise<Product> => {
-    const response = await api.get(`/products/${id}`);  // Remove /api
+    const response = await api.get(`/products/${id}`);
     return response.data;
   },
 
-  /**
-   * Search products
-   */
   searchProducts: async (query: string): Promise<Product[]> => {
-    const response = await api.get(`/products/search/?q=${encodeURIComponent(query)}`);  // Remove /api
+    const response = await api.get(`/products/search/?q=${encodeURIComponent(query)}`);
     return response.data;
   },
 

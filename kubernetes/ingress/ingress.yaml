@@ -4,31 +4,31 @@ metadata:
   name: ecommerce-ingress
   namespace: ecommerce
   annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /$2
     nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    # Remove the rewrite-target - let backends handle full path
 spec:
   ingressClassName: nginx
   rules:
     - http:
         paths:
-          # Frontend - root path
-          - path: /()(.*)
+          # Frontend - catch-all at the end
+          - path: /
             pathType: Prefix
             backend:
               service:
                 name: frontend-service
                 port:
                   number: 3000
-          # Product Service API
-          - path: /api/products(/|$)(.*)
+          # Product API - specific path first
+          - path: /api/products
             pathType: Prefix
             backend:
               service:
                 name: product-service
                 port:
                   number: 8081
-          # User Service API
-          - path: /api/users(/|$)(.*)
+          # User API
+          - path: /api/users
             pathType: Prefix
             backend:
               service:

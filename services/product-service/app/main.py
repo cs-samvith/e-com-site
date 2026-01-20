@@ -4,6 +4,7 @@ from app.models import Product, ProductCreate, ProductUpdate, HealthResponse
 from app.config import settings
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
+from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
 from uuid import UUID
 import logging
@@ -115,6 +116,15 @@ async def shutdown_event():
     """Cleanup on shutdown"""
     logger.info("Shutting down...")
     queue_consumer.stop_consuming()
+
+# Add CORS middleware - MUST be before routes
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, specify your domain
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/")

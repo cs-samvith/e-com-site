@@ -15,17 +15,51 @@ export default function ProductsPage() {
     loadProducts();
   }, []);
 
-  const loadProducts = async () => {
-    try {
-      setLoading(true);
-      const data = await productService.getProducts();
-      setProducts(data);
-    } catch (err) {
-      setError('Failed to load products');
-    } finally {
-      setLoading(false);
-    }
-  };
+// const loadProducts = async () => {
+//   try {
+//     setLoading(true);
+//     const data = await productService.getProducts();
+//     console.log('API Response:', data);
+    
+//     // Handle different response formats
+//     let productsArray: Product[] = [];
+    
+//     if (Array.isArray(data)) {
+//       productsArray = data;
+//     } else if (data && Array.isArray(data.products)) {
+//       productsArray = data.products;  // Handle {products: [...]}
+//     } else if (data && Array.isArray(data.data)) {
+//       productsArray = data.data;  // Handle {data: [...]}
+//     }
+    
+//     setProducts(productsArray);
+//   } catch (err) {
+//     console.error('Error:', err);
+//     setError('Failed to load products');
+//     setProducts([]);
+//   } finally {
+//     setLoading(false);
+//   }
+// };
+
+const loadProducts = async () => {
+  try {
+    setLoading(true);
+    
+    // Direct fetch to test
+    const response = await fetch('/api/products');
+    const data = await response.json();
+    
+    console.log('Direct fetch result:', data);
+    setProducts(Array.isArray(data) ? data : []);
+    
+  } catch (err) {
+    console.error('Error:', err);
+    setError('Failed to load products');
+  } finally {
+    setLoading(false);
+  }
+};
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
