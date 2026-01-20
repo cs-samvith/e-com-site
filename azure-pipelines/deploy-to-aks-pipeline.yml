@@ -228,15 +228,45 @@ stages:
                         --admin
 
                 - bash: |
-                    # Update image references in manifests
-                    find kubernetes/services -name "deployment.yaml" -type f -exec sed -i \
-                      "s|<YOUR_ACR>|$(acrName)|g" {} +
+                    # Get ACR info
+                    ACR_NAME=$(az acr list \
+                      --resource-group $(resourceGroup) \
+                      --query "[0].name" \
+                      --output tsv)
 
-                    # Update image tags
-                    find kubernetes/services -name "deployment.yaml" -type f -exec sed -i \
-                      "s|:latest|:${{ parameters.imageTag }}|g" {} +
+                    ACR_LOGIN_SERVER="${ACR_NAME}.azurecr.io"
 
-                    echo "✅ Manifests updated with ACR: $(acrName) and tag: ${{ parameters.imageTag }}"
+                    echo "Updating manifests with ACR: $ACR_NAME"
+                    echo "Login Server: $ACR_LOGIN_SERVER"
+                    echo ""
+
+                    # Update image references in ALL deployment files
+                    # Replace <YOUR_ACR> and <YOUR_REGISTRY> with actual ACR name
+                    find kubernetes/services -name "deployment.yaml" -type f | while read file; do
+                      echo "Updating: $file"
+                      
+                      # Replace <YOUR_ACR>
+                      sed -i "s|<YOUR_ACR>|${ACR_NAME}|g" "$file"
+                      
+                      # Replace <YOUR_REGISTRY>
+                      sed -i "s|<YOUR_REGISTRY>|${ACR_NAME}|g" "$file"
+                      
+                      # Ensure .azurecr.io is added if not present
+                      sed -i "s|image: ${ACR_NAME}/|image: ${ACR_LOGIN_SERVER}/|g" "$file"
+                      
+                      # Update image tags
+                      sed -i "s|:latest|:${{ parameters.imageTag }}|g" "$file"
+                      
+                      echo "Updated image references in $file"
+                    done
+
+                    echo ""
+                    echo "Verifying updates..."
+                    echo "─────────────────────────────────────────"
+                    grep "image:" kubernetes/services/*/deployment.yaml
+                    echo "─────────────────────────────────────────"
+                    echo ""
+                    echo "✅ Manifests updated"
                   displayName: "Update Manifests"
 
                 - bash: |
