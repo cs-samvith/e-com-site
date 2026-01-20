@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { productService } from '@/services/productServicekk';
+import { productService } from '@/services/productService';
 import { Product } from '@/types';
 import ProductCard from '@/components/ProductCard';
 
