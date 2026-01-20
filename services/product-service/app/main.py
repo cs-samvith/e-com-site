@@ -134,6 +134,11 @@ async def root():
     }
 
 
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy"}
+
+
 @app.get("/healthz", response_model=HealthResponse)
 async def health_check():
     """
