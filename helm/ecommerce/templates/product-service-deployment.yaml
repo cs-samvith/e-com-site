@@ -1,0 +1,80 @@
+{{- if .Values.productService.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ecommerce.fullname" . }}-product-service
+  labels:
+    {{- include "ecommerce.labels" . | nindent 4 }}
+    app: product-service
+    version: v1
+spec:
+  replicas: {{ .Values.productService.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ecommerce.selectorLabels" . | nindent 6 }}
+      app: product-service
+  template:
+    metadata:
+      labels:
+        {{- include "ecommerce.selectorLabels" . | nindent 8 }}
+        app: product-service
+        version: v1
+    spec:
+      containers:
+      - name: product-service
+        image: "{{ .Values.global.imageRegistry }}/{{ .Values.productService.image.repository }}:{{ .Values.productService.image.tag }}"
+        imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+        ports:
+        - containerPort: {{ .Values.productService.service.port }}
+          name: http
+          protocol: TCP
+        env:
+        - name: MOCK_MODE
+          value: "{{ .Values.productService.env.mockMode }}"
+        - name: DB_HOST
+          value: "{{ include "ecommerce.fullname" . }}-postgresql"
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_NAME
+          value: "{{ .Values.postgresql.auth.database }}"
+        - name: DB_USER
+          value: "{{ .Values.postgresql.auth.username }}"
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "ecommerce.fullname" . }}-secrets
+              key: postgres-password
+        - name: REDIS_HOST
+          value: "{{ include "ecommerce.fullname" . }}-redis-master"
+        - name: REDIS_PORT
+          value: "6379"
+        - name: RABBITMQ_HOST
+          value: "{{ include "ecommerce.fullname" . }}-rabbitmq"
+        - name: RABBITMQ_PORT
+          value: "5672"
+        - name: RABBITMQ_USER
+          value: "{{ .Values.rabbitmq.auth.username }}"
+        - name: RABBITMQ_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "ecommerce.fullname" . }}-secrets
+              key: rabbitmq-password
+        resources:
+          {{- toYaml .Values.productService.resources | nindent 10 }}
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: {{ .Values.productService.service.port }}
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: {{ .Values.productService.service.port }}
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+{{- end }}

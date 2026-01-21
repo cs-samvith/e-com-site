@@ -1,0 +1,217 @@
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - helm/*
+
+parameters:
+  - name: environment
+    displayName: "Environment"
+    type: string
+    default: "dev"
+    values:
+      - dev
+      - staging
+      - prod
+  - name: action
+    displayName: "Action"
+    type: string
+    default: "install"
+    values:
+      - install
+      - upgrade
+      - uninstall
+
+variables:
+  - name: azureServiceConnection
+    value: "azure-ecommerce-sp"
+  - name: resourceGroupPrefix
+    value: "rg-ecommerce-aks"
+  - name: resourceGroup
+    value: "$(resourceGroupPrefix)-${{ parameters.environment }}"
+  - name: helmReleaseName
+    value: "ecommerce"
+  - name: helmChartPath
+    value: "helm/ecommerce"
+
+stages:
+  - stage: ValidateHelm
+    displayName: "Validate Helm Chart"
+    jobs:
+      - job: LintChart
+        displayName: "Lint Helm Chart"
+        pool:
+          vmImage: "ubuntu-latest"
+        steps:
+          - task: HelmInstaller@1
+            displayName: "Install Helm"
+            inputs:
+              helmVersionToInstall: "3.13.0"
+
+          - bash: |
+              helm lint $(helmChartPath)
+            displayName: "Lint Helm Chart"
+
+          - bash: |
+              helm template $(helmReleaseName) $(helmChartPath) \
+                --values $(helmChartPath)/values-${{ parameters.environment }}.yaml \
+                --debug
+            displayName: "Dry-run Template Rendering"
+
+  - stage: DeployHelm
+    displayName: "Deploy with Helm"
+    dependsOn: ValidateHelm
+    condition: and(succeeded(), ne('${{ parameters.action }}', 'uninstall'))
+    jobs:
+      - deployment: HelmDeploy
+        displayName: "Helm Install/Upgrade"
+        environment: ${{ parameters.environment }}
+        pool:
+          vmImage: "ubuntu-latest"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: HelmInstaller@1
+                  displayName: "Install Helm"
+                  inputs:
+                    helmVersionToInstall: "3.13.0"
+
+                - task: AzureCLI@2
+                  displayName: "Get AKS Credentials"
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      AKS_NAME=$(az aks list \
+                        --resource-group $(resourceGroup) \
+                        --query "[0].name" \
+                        --output tsv)
+
+                      echo "##vso[task.setvariable variable=aksClusterName]$AKS_NAME"
+
+                      az aks get-credentials \
+                        --resource-group $(resourceGroup) \
+                        --name $AKS_NAME \
+                        --overwrite-existing \
+                        --admin
+
+                - bash: |
+                    # Add Bitnami repo for dependencies
+                    helm repo add bitnami https://charts.bitnami.com/bitnami
+                    helm repo update
+                  displayName: "Add Helm Repositories"
+
+                - bash: |
+                    # Check if release exists
+                    if helm list -n ecommerce | grep -q $(helmReleaseName); then
+                      echo "Release exists - performing upgrade"
+                      ACTION="upgrade"
+                    else
+                      echo "Release doesn't exist - performing install"
+                      ACTION="install"
+                    fi
+
+                    echo "##vso[task.setvariable variable=helmAction]$ACTION"
+                  displayName: "Determine Helm Action"
+
+                - bash: |
+                    # Create namespace if it doesn't exist
+                    kubectl create namespace ecommerce --dry-run=client -o yaml | kubectl apply -f -
+                  displayName: "Create Namespace"
+
+                - bash: |
+                    if [ "$(helmAction)" == "upgrade" ]; then
+                      echo "Upgrading Helm release..."
+                      helm upgrade $(helmReleaseName) $(helmChartPath) \
+                        --namespace ecommerce \
+                        --values $(helmChartPath)/values-${{ parameters.environment }}.yaml \
+                        --wait \
+                        --timeout 10m \
+                        --atomic
+                    else
+                      echo "Installing Helm release..."
+                      helm install $(helmReleaseName) $(helmChartPath) \
+                        --namespace ecommerce \
+                        --values $(helmChartPath)/values-${{ parameters.environment }}.yaml \
+                        --wait \
+                        --timeout 10m \
+                        --atomic
+                    fi
+                  displayName: "Helm Install/Upgrade"
+
+                - bash: |
+                    echo "=== Helm Release Status ==="
+                    helm status $(helmReleaseName) -n ecommerce
+
+                    echo ""
+                    echo "=== Deployed Resources ==="
+                    kubectl get all -n ecommerce
+
+                    echo ""
+                    echo "=== Ingress ==="
+                    kubectl get ingress -n ecommerce
+                  displayName: "Show Deployment Status"
+
+                - bash: |
+                    # Wait for ingress IP
+                    for i in {1..30}; do
+                      INGRESS_IP=$(kubectl get ingress -n ecommerce -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+                      if [ -n "$INGRESS_IP" ]; then
+                        echo "##vso[task.setvariable variable=ingressIP]$INGRESS_IP"
+                        echo "Application URL: http://$INGRESS_IP"
+                        break
+                      fi
+                      echo "Waiting for ingress IP... ($i/30)"
+                      sleep 10
+                    done
+                  displayName: "Get Application URL"
+
+  - stage: UninstallHelm
+    displayName: "Uninstall Helm Release"
+    dependsOn: ValidateHelm
+    condition: and(succeeded(), eq('${{ parameters.action }}', 'uninstall'))
+    jobs:
+      - deployment: HelmUninstall
+        displayName: "Helm Uninstall"
+        environment: ${{ parameters.environment }}
+        pool:
+          vmImage: "ubuntu-latest"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: HelmInstaller@1
+                  displayName: "Install Helm"
+                  inputs:
+                    helmVersionToInstall: "3.13.0"
+
+                - task: AzureCLI@2
+                  displayName: "Get AKS Credentials"
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      AKS_NAME=$(az aks list \
+                        --resource-group $(resourceGroup) \
+                        --query "[0].name" \
+                        --output tsv)
+
+                      az aks get-credentials \
+                        --resource-group $(resourceGroup) \
+                        --name $AKS_NAME \
+                        --overwrite-existing \
+                        --admin
+
+                - bash: |
+                    helm uninstall $(helmReleaseName) -n ecommerce
+
+                    echo "✅ Helm release uninstalled"
+                    echo "Note: PVCs are preserved. Delete manually if needed."
+                  displayName: "Uninstall Helm Release"

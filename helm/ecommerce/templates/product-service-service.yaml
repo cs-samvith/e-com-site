@@ -1,0 +1,20 @@
+{{- if .Values.productService.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: product-service
+  namespace: ecommerce
+  labels:
+    {{- include "ecommerce.labels" . | nindent 4 }}
+    app: product-service
+spec:
+  type: {{ .Values.productService.service.type }}
+  ports:
+  - port: {{ .Values.productService.service.port }}
+    targetPort: {{ .Values.productService.service.port }}
+    protocol: TCP
+    name: http
+  selector:
+    {{- include "ecommerce.selectorLabels" . | nindent 4 }}
+    app: product-service
+{{- end }}

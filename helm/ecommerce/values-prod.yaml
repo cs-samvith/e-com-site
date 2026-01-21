@@ -1,0 +1,117 @@
+# Production environment overrides
+
+global:
+  imageRegistry: acrecommercedev.azurecr.io
+  imagePullPolicy: Always
+
+productService:
+  replicaCount: 3 # More replicas for production
+  image:
+    tag: v1.0.0 # Use specific version, not latest
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "200m"
+    limits:
+      memory: "512Mi"
+      cpu: "1000m"
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 70
+
+userService:
+  replicaCount: 3
+  image:
+    tag: v1.0.0
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "200m"
+    limits:
+      memory: "512Mi"
+      cpu: "1000m"
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 70
+
+frontendService:
+  replicaCount: 3
+  image:
+    tag: v1.0.0
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "400m"
+    limits:
+      memory: "1Gi"
+      cpu: "2000m"
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 70
+
+postgresql:
+  primary:
+    persistence:
+      enabled: true
+      size: 20Gi # Larger for production
+    resources:
+      requests:
+        memory: 512Mi
+        cpu: 500m
+      limits:
+        memory: 1Gi
+        cpu: 1000m
+
+redis:
+  master:
+    persistence:
+      enabled: true
+      size: 5Gi
+    resources:
+      requests:
+        memory: 256Mi
+        cpu: 200m
+
+rabbitmq:
+  persistence:
+    enabled: true
+    size: 10Gi
+  resources:
+    requests:
+      memory: 512Mi
+      cpu: 300m
+  replicaCount: 3 # High availability
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  hosts:
+    - host: ecommerce.yourdomain.com
+      paths:
+        - path: /
+          pathType: Prefix
+          service: frontend-service
+        - path: /api/products
+          pathType: Prefix
+          service: product-service
+        - path: /api/users
+          pathType: Prefix
+          service: user-service
+  tls:
+    - secretName: ecommerce-tls
+      hosts:
+        - ecommerce.yourdomain.com
+
+# Don't hardcode secrets in production!
+# Pass via command line or use Azure Key Vault
+secrets:
+  create: false # Create manually or via pipeline

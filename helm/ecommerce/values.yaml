@@ -1,0 +1,156 @@
+# Default values for ecommerce microservices
+# This is a YAML-formatted file.
+
+# Global settings
+global:
+  imageRegistry: acrecommercedev.azurecr.io
+  imagePullPolicy: Always
+  storageClass: default
+
+# Product Service
+productService:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: product-service
+    tag: latest
+  service:
+    type: ClusterIP
+    port: 8081
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "256Mi"
+      cpu: "500m"
+  env:
+    mockMode: false
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+
+# User Service
+userService:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: user-service
+    tag: latest
+  service:
+    type: ClusterIP
+    port: 8080
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "256Mi"
+      cpu: "500m"
+  env:
+    mockMode: false
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+
+# Frontend Service
+frontendService:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: frontend-service
+    tag: latest
+  service:
+    type: ClusterIP
+    port: 3000
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "200m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  env:
+    nodeEnv: production
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+
+# PostgreSQL (using Bitnami chart)
+postgresql:
+  enabled: true
+  auth:
+    username: postgres
+    password: postgres123 # Override in production!
+    database: products_db
+  primary:
+    persistence:
+      enabled: true
+      size: 5Gi
+    resources:
+      requests:
+        memory: 256Mi
+        cpu: 250m
+
+# Redis (using Bitnami chart)
+redis:
+  enabled: true
+  auth:
+    enabled: false
+  master:
+    persistence:
+      enabled: false
+    resources:
+      requests:
+        memory: 64Mi
+        cpu: 50m
+
+# RabbitMQ (using Bitnami chart)
+rabbitmq:
+  enabled: true
+  auth:
+    username: guest
+    password: guest
+  persistence:
+    enabled: true
+    size: 2Gi
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 100m
+
+# Ingress
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+  hosts:
+    - host: ecommerce.local
+      paths:
+        - path: /
+          pathType: Prefix
+          service: frontend-service
+        - path: /api/products
+          pathType: Prefix
+          service: product-service
+        - path: /api/users
+          pathType: Prefix
+          service: user-service
+  tls: []
+
+# Secrets
+secrets:
+  create: true
+  postgres:
+    password: postgres123
+  rabbitmq:
+    password: guest
+  jwt:
+    secret: your-jwt-secret-change-in-production

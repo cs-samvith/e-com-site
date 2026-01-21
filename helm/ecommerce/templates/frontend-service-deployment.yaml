@@ -1,0 +1,56 @@
+{{- if .Values.frontendService.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ecommerce.fullname" . }}-frontend-service
+  labels:
+    {{- include "ecommerce.labels" . | nindent 4 }}
+    app: frontend-service
+    version: v1
+spec:
+  replicas: {{ .Values.frontendService.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ecommerce.selectorLabels" . | nindent 6 }}
+      app: frontend-service
+  template:
+    metadata:
+      labels:
+        {{- include "ecommerce.selectorLabels" . | nindent 8 }}
+        app: frontend-service
+        version: v1
+    spec:
+      containers:
+      - name: frontend-service
+        image: "{{ .Values.global.imageRegistry }}/{{ .Values.frontendService.image.repository }}:{{ .Values.frontendService.image.tag }}"
+        imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+        ports:
+        - containerPort: {{ .Values.frontendService.service.port }}
+          name: http
+          protocol: TCP
+        env:
+        - name: NEXT_PUBLIC_PRODUCT_SERVICE_URL
+          value: "http://{{ include "ecommerce.fullname" . }}-product-service:{{ .Values.productService.service.port }}"
+        - name: NEXT_PUBLIC_USER_SERVICE_URL
+          value: "http://{{ include "ecommerce.fullname" . }}-user-service:{{ .Values.userService.service.port }}"
+        - name: NODE_ENV
+          value: "{{ .Values.frontendService.env.nodeEnv }}"
+        resources:
+          {{- toYaml .Values.frontendService.resources | nindent 10 }}
+        livenessProbe:
+          httpGet:
+            path: /
+            port: {{ .Values.frontendService.service.port }}
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /
+            port: {{ .Values.frontendService.service.port }}
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+{{- end }}

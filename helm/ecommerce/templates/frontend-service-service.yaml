@@ -1,0 +1,20 @@
+{{- if .Values.frontendService.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-service
+  namespace: ecommerce
+  labels:
+    {{- include "ecommerce.labels" . | nindent 4 }}
+    app: frontend-service
+spec:
+  type: {{ .Values.frontendService.service.type }}
+  ports:
+  - port: {{ .Values.frontendService.service.port }}
+    targetPort: {{ .Values.frontendService.service.port }}
+    protocol: TCP
+    name: http
+  selector:
+    {{- include "ecommerce.selectorLabels" . | nindent 4 }}
+    app: frontend-service
+{{- end }}

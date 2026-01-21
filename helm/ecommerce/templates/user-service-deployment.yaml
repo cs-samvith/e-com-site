@@ -1,0 +1,89 @@
+{{- if .Values.userService.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ecommerce.fullname" . }}-user-service
+  labels:
+    {{- include "ecommerce.labels" . | nindent 4 }}
+    app: user-service
+    version: v1
+spec:
+  replicas: {{ .Values.userService.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ecommerce.selectorLabels" . | nindent 6 }}
+      app: user-service
+  template:
+    metadata:
+      labels:
+        {{- include "ecommerce.selectorLabels" . | nindent 8 }}
+        app: user-service
+        version: v1
+    spec:
+      containers:
+      - name: user-service
+        image: "{{ .Values.global.imageRegistry }}/{{ .Values.userService.image.repository }}:{{ .Values.userService.image.tag }}"
+        imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+        ports:
+        - containerPort: {{ .Values.userService.service.port }}
+          name: http
+          protocol: TCP
+        env:
+        - name: MOCK_MODE
+          value: "{{ .Values.userService.env.mockMode }}"
+        - name: DB_HOST
+          value: "{{ include "ecommerce.fullname" . }}-postgresql"
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_NAME
+          value: "users_db"
+        - name: DB_USER
+          value: "{{ .Values.postgresql.auth.username }}"
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "ecommerce.fullname" . }}-secrets
+              key: postgres-password
+        - name: REDIS_HOST
+          value: "{{ include "ecommerce.fullname" . }}-redis-master"
+        - name: REDIS_PORT
+          value: "6379"
+        - name: RABBITMQ_HOST
+          value: "{{ include "ecommerce.fullname" . }}-rabbitmq"
+        - name: RABBITMQ_PORT
+          value: "5672"
+        - name: RABBITMQ_USER
+          value: "{{ .Values.rabbitmq.auth.username }}"
+        - name: RABBITMQ_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "ecommerce.fullname" . }}-secrets
+              key: rabbitmq-password
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "ecommerce.fullname" . }}-secrets
+              key: jwt-secret
+        - name: JWT_ALGORITHM
+          value: "HS256"
+        - name: ACCESS_TOKEN_EXPIRE_MINUTES
+          value: "30"
+        resources:
+          {{- toYaml .Values.userService.resources | nindent 10 }}
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: {{ .Values.userService.service.port }}
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: {{ .Values.userService.service.port }}
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+{{- end }}

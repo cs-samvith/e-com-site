@@ -1,0 +1,61 @@
+{{- if .Values.productService.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ecommerce.fullname" . }}-product-service
+  labels:
+    {{- include "ecommerce.labels" . | nindent 4 }}
+    app: product-service
+spec:
+  type: {{ .Values.productService.service.type }}
+  ports:
+  - port: {{ .Values.productService.service.port }}
+    targetPort: {{ .Values.productService.service.port }}
+    protocol: TCP
+    name: http
+  selector:
+    {{- include "ecommerce.selectorLabels" . | nindent 4 }}
+    app: product-service
+{{- end }}
+
+---
+{{- if .Values.userService.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ecommerce.fullname" . }}-user-service
+  labels:
+    {{- include "ecommerce.labels" . | nindent 4 }}
+    app: user-service
+spec:
+  type: {{ .Values.userService.service.type }}
+  ports:
+  - port: {{ .Values.userService.service.port }}
+    targetPort: {{ .Values.userService.service.port }}
+    protocol: TCP
+    name: http
+  selector:
+    {{- include "ecommerce.selectorLabels" . | nindent 4 }}
+    app: user-service
+{{- end }}
+
+---
+{{- if .Values.frontendService.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ecommerce.fullname" . }}-frontend-service
+  labels:
+    {{- include "ecommerce.labels" . | nindent 4 }}
+    app: frontend-service
+spec:
+  type: {{ .Values.frontendService.service.type }}
+  ports:
+  - port: {{ .Values.frontendService.service.port }}
+    targetPort: {{ .Values.frontendService.service.port }}
+    protocol: TCP
+    name: http
+  selector:
+    {{- include "ecommerce.selectorLabels" . | nindent 4 }}
+    app: frontend-service
+{{- end }}
