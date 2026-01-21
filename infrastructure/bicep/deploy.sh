@@ -1,15 +1,15 @@
 #!/bin/bash
 
-# Deploy AKS Infrastructure using Bicep
-# Usage: ./deploy.sh [dev|prod]
+# Deploy AKS Infrastructure using Bicep - Fixed Version
+# Usage: ./deploy.sh [dev|staging|prod]
 
-set -e
+set -e  # Exit on any error
 
-# Colors for output
+# Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 # Default environment
 ENVIRONMENT=${1:-dev}
@@ -17,7 +17,7 @@ ENVIRONMENT=${1:-dev}
 # Configuration
 RESOURCE_GROUP="rg-ecommerce-aks-${ENVIRONMENT}"
 LOCATION="eastus"
-DEPLOYMENT_NAME="aks-ecommerce-deployment-$(date +%Y%m%d-%H%M%S)"
+DEPLOYMENT_NAME="aks-deployment-$(date +%Y%m%d-%H%M%S)"
 
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}AKS Infrastructure Deployment${NC}"
@@ -27,29 +27,42 @@ echo -e "Resource Group: ${YELLOW}${RESOURCE_GROUP}${NC}"
 echo -e "Location: ${YELLOW}${LOCATION}${NC}"
 echo ""
 
-# Check if Azure CLI is installed
+# Check Azure CLI
 if ! command -v az &> /dev/null; then
-    echo -e "${RED}Error: Azure CLI is not installed${NC}"
-    echo "Install from: https://docs.microsoft.com/en-us/cli/azure/install-azure-cli"
+    echo -e "${RED}Error: Azure CLI not installed${NC}"
     exit 1
 fi
 
-# Check if logged in to Azure
-echo -e "${YELLOW}Checking Azure login status...${NC}"
-az account show &> /dev/null || {
-    echo -e "${RED}Not logged in to Azure. Please run 'az login'${NC}"
+# Check login
+echo -e "${YELLOW}Checking Azure login...${NC}"
+if ! az account show &> /dev/null; then
+    echo -e "${RED}Not logged in. Run 'az login'${NC}"
     exit 1
-}
+fi
 
-echo -e "${GREEN}✓ Logged in to Azure${NC}"
-SUBSCRIPTION_NAME=$(az account show --query name -o tsv)
-echo -e "Subscription: ${YELLOW}${SUBSCRIPTION_NAME}${NC}"
+echo -e "${GREEN}✓ Logged in${NC}"
+SUBSCRIPTION=$(az account show --query name -o tsv)
+echo -e "Subscription: ${YELLOW}${SUBSCRIPTION}${NC}"
 echo ""
 
-# Generate SSH key if it doesn't exist
+# Check for existing cluster
+echo -e "${YELLOW}Checking for existing cluster...${NC}"
+if az aks show --resource-group $RESOURCE_GROUP --name aks-ecommerce-${ENVIRONMENT} &> /dev/null; then
+    echo -e "${RED}WARNING: Cluster already exists!${NC}"
+    echo -e "${YELLOW}You cannot change SSH keys on existing clusters.${NC}"
+    echo ""
+    read -p "Continue anyway? (y/N) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Deployment cancelled"
+        exit 0
+    fi
+fi
+
+# Generate SSH key
 SSH_KEY_PATH="$HOME/.ssh/id_rsa_aks"
 if [ ! -f "$SSH_KEY_PATH" ]; then
-    echo -e "${YELLOW}Generating SSH key pair...${NC}"
+    echo -e "${YELLOW}Generating SSH key...${NC}"
     ssh-keygen -t rsa -b 2048 -f "$SSH_KEY_PATH" -N "" -C "aks-ecommerce"
     echo -e "${GREEN}✓ SSH key generated${NC}"
 else
@@ -69,53 +82,58 @@ az group create \
 echo -e "${GREEN}✓ Resource group created${NC}"
 echo ""
 
-# Update parameters file with SSH key
-PARAMS_FILE="parameters.${ENVIRONMENT}.json"
-echo -e "${YELLOW}Updating parameters file with SSH key...${NC}"
+# Create parameters file
+echo -e "${YELLOW}Creating parameters file...${NC}"
 
-# Create temporary parameters file with SSH key
-jq --arg ssh_key "$SSH_PUBLIC_KEY" \
-   '.parameters.sshPublicKey.value = $ssh_key' \
-   "$PARAMS_FILE" > "${PARAMS_FILE}.tmp"
+cat > parameters.tmp.json <<EOF
+{
+  "\$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environment": {
+      "value": "${ENVIRONMENT}"
+    },
+    "sshPublicKey": {
+      "value": "${SSH_PUBLIC_KEY}"
+    }
+  }
+}
+EOF
 
-echo -e "${GREEN}✓ Parameters updated${NC}"
+echo -e "${GREEN}✓ Parameters file created${NC}"
 echo ""
 
-# Validate deployment
-echo -e "${YELLOW}Validating Bicep deployment...${NC}"
-VALIDATION_RESULT=$(az deployment group validate \
+# Validate
+echo -e "${YELLOW}Validating template...${NC}"
+if ! az deployment group validate \
     --resource-group "$RESOURCE_GROUP" \
-    --template-file main.bicep \
-    --parameters "@${PARAMS_FILE}.tmp" \
-    --query 'properties.provisioningState' \
-    --output tsv 2>&1)
-
-if [ "$VALIDATION_RESULT" != "Succeeded" ]; then
+    --template-file main-no-rbac.bicep \
+    --parameters @parameters.tmp.json \
+    --output none 2>&1; then
     echo -e "${RED}✗ Validation failed${NC}"
-    echo "$VALIDATION_RESULT"
-    rm -f "${PARAMS_FILE}.tmp"
+    rm -f parameters.tmp.json
     exit 1
 fi
 
 echo -e "${GREEN}✓ Validation succeeded${NC}"
 echo ""
 
-# Deploy infrastructure
-echo -e "${YELLOW}Starting deployment (this will take 10-15 minutes)...${NC}"
+# Deploy
+echo -e "${YELLOW}Starting deployment (10-15 minutes)...${NC}"
 echo -e "${YELLOW}Deployment name: ${DEPLOYMENT_NAME}${NC}"
 echo ""
 
 az deployment group create \
     --resource-group "$RESOURCE_GROUP" \
     --name "$DEPLOYMENT_NAME" \
-    --template-file main.bicep \
-    --parameters "@${PARAMS_FILE}.tmp" \
+    --template-file main-no-rbac.bicep \
+    --parameters @parameters.tmp.json \
     --output table
 
-# Clean up temporary file
-rm -f "${PARAMS_FILE}.tmp"
+# Clean up
+rm -f parameters.tmp.json
 
-# Check deployment status
+# Check status
 DEPLOYMENT_STATE=$(az deployment group show \
     --resource-group "$RESOURCE_GROUP" \
     --name "$DEPLOYMENT_NAME" \
@@ -129,12 +147,11 @@ fi
 
 echo ""
 echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}Deployment Completed Successfully!${NC}"
+echo -e "${GREEN}Deployment Completed!${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo ""
 
 # Get outputs
-echo -e "${YELLOW}Deployment Outputs:${NC}"
 AKS_NAME=$(az deployment group show \
     --resource-group "$RESOURCE_GROUP" \
     --name "$DEPLOYMENT_NAME" \
@@ -147,53 +164,42 @@ ACR_NAME=$(az deployment group show \
     --query 'properties.outputs.acrName.value' \
     --output tsv)
 
-ACR_LOGIN_SERVER=$(az deployment group show \
-    --resource-group "$RESOURCE_GROUP" \
-    --name "$DEPLOYMENT_NAME" \
-    --query 'properties.outputs.acrLoginServer.value' \
-    --output tsv)
-
 echo -e "AKS Cluster: ${GREEN}${AKS_NAME}${NC}"
 echo -e "ACR Name: ${GREEN}${ACR_NAME}${NC}"
-echo -e "ACR Login Server: ${GREEN}${ACR_LOGIN_SERVER}${NC}"
 echo ""
 
-# Get AKS credentials
+# Get credentials
 echo -e "${YELLOW}Getting AKS credentials...${NC}"
 az aks get-credentials \
     --resource-group "$RESOURCE_GROUP" \
     --name "$AKS_NAME" \
-    --overwrite-existing
+    --overwrite-existing \
+    --admin
 
-echo -e "${GREEN}✓ Credentials saved to ~/.kube/config${NC}"
+echo -e "${GREEN}✓ Credentials saved${NC}"
 echo ""
 
-# Verify cluster access
-echo -e "${YELLOW}Verifying cluster access...${NC}"
+# Verify
+echo -e "${YELLOW}Verifying cluster...${NC}"
 kubectl cluster-info
-echo ""
-
-# Display nodes
-echo -e "${YELLOW}Cluster nodes:${NC}"
 kubectl get nodes
 echo ""
 
-# Next steps
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}Next Steps:${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo ""
-echo "1. Build and push Docker images:"
-echo -e "   ${YELLOW}az acr login --name ${ACR_NAME}${NC}"
-echo -e "   ${YELLOW}docker build -t ${ACR_LOGIN_SERVER}/product-service:latest services/product-service${NC}"
-echo -e "   ${YELLOW}docker push ${ACR_LOGIN_SERVER}/product-service:latest${NC}"
+echo "1. Fix ACR permissions:"
+echo -e "   ${YELLOW}./fix-acr-permissions.sh ${ENVIRONMENT}${NC}"
 echo ""
-echo "2. Deploy applications to AKS:"
+echo "2. Install NGINX Ingress:"
+echo -e "   ${YELLOW}kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.10.0/deploy/static/provider/cloud/deploy.yaml${NC}"
+echo ""
+echo "3. Build and push images (or run build pipeline)"
+echo ""
+echo "4. Deploy applications:"
 echo -e "   ${YELLOW}kubectl apply -f kubernetes/base/${NC}"
 echo -e "   ${YELLOW}kubectl apply -f kubernetes/data-layer/${NC}"
 echo -e "   ${YELLOW}kubectl apply -f kubernetes/services/${NC}"
-echo ""
-echo "3. Monitor deployment:"
-echo -e "   ${YELLOW}kubectl get pods -n ecommerce -w${NC}"
 echo ""
 echo -e "${GREEN}Deployment complete!${NC}"
