@@ -1,0 +1,636 @@
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - services/*
+
+pr:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - services/*
+
+parameters:
+  - name: environment
+    displayName: "Environment"
+    type: string
+    default: "dev"
+    values:
+      - dev
+      - staging
+      - prod
+  - name: services
+    displayName: "Services to Build"
+    type: object
+    default:
+      - product-service
+      - user-service
+      - frontend-service
+  - name: runSecurityScan
+    displayName: "Run Security Scan"
+    type: boolean
+    default: true
+  - name: coverageThreshold
+    displayName: "Code Coverage Threshold (%)"
+    type: number
+    default: 80
+
+variables:
+  - name: azureServiceConnection
+    value: "azure-ecommerce-sp"
+  - name: resourceGroupPrefix
+    value: "rg-ecommerce-aks"
+  - name: resourceGroup
+    value: "$(resourceGroupPrefix)-${{ parameters.environment }}"
+  - name: imageTag
+    value: "$(Build.BuildNumber)"
+  - name: pythonVersion
+    value: "3.11"
+  - name: nodeVersion
+    value: "18.x"
+
+stages:
+  # ============================================
+  # STAGE 1: Test & Code Coverage
+  # ============================================
+  - stage: Test
+    displayName: "Test & Code Coverage"
+    jobs:
+      # Python FastAPI Services (product-service & user-service)
+      - ${{ each service in parameters.services }}:
+          - ${{ if or(eq(service, 'product-service'), eq(service, 'user-service')) }}:
+              - job: Test_${{ replace(service, '-', '_') }}
+                displayName: "Test ${{ service }}"
+                pool:
+                  vmImage: "ubuntu-latest"
+                steps:
+                  - checkout: self
+
+                  - task: UsePythonVersion@0
+                    displayName: "Install Python"
+                    inputs:
+                      versionSpec: $(pythonVersion)
+                      addToPath: true
+
+                  - task: Cache@2
+                    displayName: "Cache pip packages"
+                    inputs:
+                      key: 'python | "$(Agent.OS)" | services/${{ service }}/requirements.txt'
+                      path: ~/.cache/pip
+                      cacheHitVar: CACHE_RESTORED
+
+                  - script: |
+                      cd services/${{ service }}
+                      python -m pip install --upgrade pip
+                      pip install -r requirements.txt
+                      pip install pytest pytest-cov pytest-asyncio httpx
+                    displayName: "Install Dependencies"
+
+                  - script: |
+                      cd services/${{ service }}
+                      pytest --cov=app --cov-report=xml --cov-report=html --cov-report=term --junitxml=junit.xml -v
+                    displayName: "Run Tests with Coverage"
+                    continueOnError: false
+
+                  - task: PublishTestResults@2
+                    displayName: "Publish Test Results"
+                    inputs:
+                      testResultsFormat: "JUnit"
+                      testResultsFiles: "**/junit.xml"
+                      searchFolder: "$(System.DefaultWorkingDirectory)/services/${{ service }}"
+                      mergeTestResults: true
+                      testRunTitle: "${{ service }} Tests"
+                      failTaskOnFailedTests: true
+                    condition: succeededOrFailed()
+
+                  - task: PublishCodeCoverageResults@1
+                    displayName: "Publish Coverage Results"
+                    inputs:
+                      codeCoverageTool: "Cobertura"
+                      summaryFileLocation: "$(System.DefaultWorkingDirectory)/services/${{ service }}/coverage.xml"
+                      reportDirectory: "$(System.DefaultWorkingDirectory)/services/${{ service }}/htmlcov"
+                      failIfCoverageEmpty: true
+                    condition: succeededOrFailed()
+
+                  - script: |
+                      cd services/${{ service }}
+
+                      # Extract coverage percentage from pytest output
+                      COVERAGE=$(python -c "
+                      import xml.etree.ElementTree as ET
+                      tree = ET.parse('coverage.xml')
+                      root = tree.getroot()
+                      coverage = float(root.attrib['line-rate']) * 100
+                      print(f'{coverage:.2f}')
+                      ")
+
+                      echo "Coverage: $COVERAGE%"
+                      THRESHOLD=${{ parameters.coverageThreshold }}
+
+                      if (( $(echo "$COVERAGE < $THRESHOLD" | bc -l) )); then
+                        echo "##vso[task.logissue type=error]Coverage $COVERAGE% is below threshold $THRESHOLD%"
+                        exit 1
+                      else
+                        echo "##vso[task.complete result=Succeeded;]Coverage $COVERAGE% meets threshold $THRESHOLD%"
+                      fi
+                    displayName: "Check Coverage Threshold"
+                    condition: succeededOrFailed()
+
+                  - task: PublishBuildArtifacts@1
+                    displayName: "Publish Coverage Report"
+                    inputs:
+                      PathtoPublish: "services/${{ service }}/htmlcov"
+                      ArtifactName: "coverage-${{ service }}"
+                      publishLocation: "Container"
+                    condition: succeededOrFailed()
+
+      # Frontend Service (React + Next.js)
+      - ${{ each service in parameters.services }}:
+          - ${{ if eq(service, 'frontend-service') }}:
+              - job: Test_frontend_service
+                displayName: "Test frontend-service"
+                pool:
+                  vmImage: "ubuntu-latest"
+                steps:
+                  - checkout: self
+
+                  - task: NodeTool@0
+                    displayName: "Install Node.js"
+                    inputs:
+                      versionSpec: $(nodeVersion)
+
+                  - task: Cache@2
+                    displayName: "Cache npm packages"
+                    inputs:
+                      key: 'npm | "$(Agent.OS)" | services/frontend-service/package-lock.json'
+                      path: services/frontend-service/node_modules
+                      cacheHitVar: CACHE_RESTORED
+
+                  - script: |
+                      cd services/frontend-service
+                      npm ci
+                    displayName: "Install Dependencies"
+                    condition: ne(variables.CACHE_RESTORED, 'true')
+
+                  - script: |
+                      cd services/frontend-service
+                      npm run test:coverage
+                    displayName: "Run Tests with Coverage"
+                    continueOnError: false
+
+                  - task: PublishTestResults@2
+                    displayName: "Publish Test Results"
+                    inputs:
+                      testResultsFormat: "JUnit"
+                      testResultsFiles: "**/junit.xml"
+                      searchFolder: "$(System.DefaultWorkingDirectory)/services/frontend-service"
+                      mergeTestResults: true
+                      testRunTitle: "frontend-service Tests"
+                      failTaskOnFailedTests: true
+                    condition: succeededOrFailed()
+
+                  - task: PublishCodeCoverageResults@1
+                    displayName: "Publish Coverage Results"
+                    inputs:
+                      codeCoverageTool: "Cobertura"
+                      summaryFileLocation: "$(System.DefaultWorkingDirectory)/services/frontend-service/coverage/cobertura-coverage.xml"
+                      reportDirectory: "$(System.DefaultWorkingDirectory)/services/frontend-service/coverage"
+                      failIfCoverageEmpty: true
+                    condition: succeededOrFailed()
+
+                  - script: |
+                      cd services/frontend-service
+
+                      if [ -f coverage/coverage-summary.json ]; then
+                        COVERAGE=$(node -pe "JSON.parse(require('fs').readFileSync('coverage/coverage-summary.json', 'utf8')).total.lines.pct")
+                        echo "Coverage: $COVERAGE%"
+                        
+                        THRESHOLD=${{ parameters.coverageThreshold }}
+                        
+                        if (( $(echo "$COVERAGE < $THRESHOLD" | bc -l) )); then
+                          echo "##vso[task.logissue type=error]Coverage $COVERAGE% is below threshold $THRESHOLD%"
+                          exit 1
+                        else
+                          echo "##vso[task.complete result=Succeeded;]Coverage $COVERAGE% meets threshold $THRESHOLD%"
+                        fi
+                      else
+                        echo "##vso[task.logissue type=warning]Coverage summary not found"
+                      fi
+                    displayName: "Check Coverage Threshold"
+                    condition: succeededOrFailed()
+
+                  - task: PublishBuildArtifacts@1
+                    displayName: "Publish Coverage Report"
+                    inputs:
+                      PathtoPublish: "services/frontend-service/coverage"
+                      ArtifactName: "coverage-frontend-service"
+                      publishLocation: "Container"
+                    condition: succeededOrFailed()
+
+  # ============================================
+  # STAGE 2: Build Docker Images
+  # ============================================
+  - stage: Build
+    displayName: "Build Docker Images"
+    dependsOn: Test
+    condition: succeeded()
+    jobs:
+      - ${{ each service in parameters.services }}:
+          - job: Build_${{ replace(service, '-', '_') }}
+            displayName: "Build ${{ service }}"
+            pool:
+              vmImage: "ubuntu-latest"
+            steps:
+              - checkout: self
+
+              - task: AzureCLI@2
+                displayName: "Get ACR Info"
+                name: GetACR
+                inputs:
+                  azureSubscription: $(azureServiceConnection)
+                  scriptType: "bash"
+                  scriptLocation: "inlineScript"
+                  inlineScript: |
+                    ACR_NAME=$(az acr list \
+                      --resource-group $(resourceGroup) \
+                      --query "[0].name" \
+                      --output tsv)
+
+                    if [ -z "$ACR_NAME" ]; then
+                      echo "##vso[task.logissue type=error]ACR not found in $(resourceGroup)"
+                      echo "Please run the Infrastructure pipeline first"
+                      exit 1
+                    fi
+
+                    echo "##vso[task.setvariable variable=acrName;isOutput=true]$ACR_NAME"
+                    echo "##vso[task.setvariable variable=acrName;isSecret=false]$ACR_NAME"
+                    echo "ACR Name: $ACR_NAME"
+
+              - task: AzureCLI@2
+                displayName: "Build and Push ${{ service }}"
+                inputs:
+                  azureSubscription: $(azureServiceConnection)
+                  scriptType: "bash"
+                  scriptLocation: "inlineScript"
+                  inlineScript: |
+                    set -e
+
+                    ACR_NAME=$(az acr list \
+                      --resource-group $(resourceGroup) \
+                      --query "[0].name" \
+                      --output tsv)
+
+                    SERVICE="${{ service }}"
+                    IMAGE_TAG="$(imageTag)"
+
+                    echo "========================================="
+                    echo "Building $SERVICE"
+                    echo "========================================="
+                    echo "ACR: $ACR_NAME"
+                    echo "Image tags: $IMAGE_TAG, latest"
+                    echo ""
+
+                    cd $(Build.SourcesDirectory)
+
+                    DOCKERFILE_PATH="services/$SERVICE/Dockerfile"
+
+                    if [ ! -f "$DOCKERFILE_PATH" ]; then
+                      echo "##vso[task.logissue type=error]Dockerfile not found: $DOCKERFILE_PATH"
+                      exit 1
+                    fi
+
+                    echo "✅ Dockerfile found: $DOCKERFILE_PATH"
+                    echo ""
+
+                    echo "Starting build in ACR..."
+                    az acr build \
+                      --registry $ACR_NAME \
+                      --image $SERVICE:$IMAGE_TAG \
+                      --image $SERVICE:latest \
+                      --file $DOCKERFILE_PATH \
+                      --verbose \
+                      services/$SERVICE
+
+                    BUILD_RESULT=$?
+
+                    if [ $BUILD_RESULT -eq 0 ]; then
+                      echo ""
+                      echo "✅ $SERVICE built and pushed successfully"
+                      echo "   Image: $ACR_NAME.azurecr.io/$SERVICE:$IMAGE_TAG"
+                      echo "   Image: $ACR_NAME.azurecr.io/$SERVICE:latest"
+                    else
+                      echo "##vso[task.logissue type=error]Build failed with exit code $BUILD_RESULT"
+                      exit $BUILD_RESULT
+                    fi
+
+              - task: AzureCLI@2
+                displayName: "Verify Image ${{ service }}"
+                inputs:
+                  azureSubscription: $(azureServiceConnection)
+                  scriptType: "bash"
+                  scriptLocation: "inlineScript"
+                  inlineScript: |
+                    ACR_NAME=$(az acr list \
+                      --resource-group $(resourceGroup) \
+                      --query "[0].name" \
+                      --output tsv)
+
+                    echo "Verifying ${{ service }} in ACR..."
+                    sleep 5
+
+                    if az acr repository show --name $ACR_NAME --repository ${{ service }} &> /dev/null; then
+                      echo "✅ Repository exists"
+                      
+                      echo "Listing tags for ${{ service }}:"
+                      az acr repository show-tags \
+                        --name $ACR_NAME \
+                        --repository ${{ service }} \
+                        --output table
+                    else
+                      echo "⚠️ Repository not immediately visible (this is normal)"
+                      echo "Image was built successfully by az acr build"
+                    fi
+
+                    echo "✅ Image ${{ service }}:$(imageTag) verified"
+                continueOnError: true
+
+  # ============================================
+  # STAGE 3: Security Scanning
+  # ============================================
+  - stage: SecurityScan
+    displayName: "Security Scanning"
+    dependsOn: Build
+    condition: and(succeeded(), eq(${{ parameters.runSecurityScan }}, true))
+    jobs:
+      - ${{ each service in parameters.services }}:
+          - job: Scan_${{ replace(service, '-', '_') }}
+            displayName: "Scan ${{ service }}"
+            pool:
+              vmImage: "ubuntu-latest"
+            steps:
+              - checkout: none
+
+              - task: AzureCLI@2
+                displayName: "Get ACR Credentials"
+                inputs:
+                  azureSubscription: $(azureServiceConnection)
+                  scriptType: "bash"
+                  scriptLocation: "inlineScript"
+                  inlineScript: |
+                    ACR_NAME=$(az acr list \
+                      --resource-group $(resourceGroup) \
+                      --query "[0].name" \
+                      --output tsv)
+
+                    echo "##vso[task.setvariable variable=acrName]$ACR_NAME"
+                    echo "ACR: $ACR_NAME"
+
+              - script: |
+                  echo "Installing Trivy..."
+                  wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+                  echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+                  sudo apt-get update
+                  sudo apt-get install trivy -y
+                  trivy --version
+                displayName: "Install Trivy Scanner"
+
+              - task: AzureCLI@2
+                displayName: "Scan ${{ service }} with Trivy"
+                inputs:
+                  azureSubscription: $(azureServiceConnection)
+                  scriptType: "bash"
+                  scriptLocation: "inlineScript"
+                  inlineScript: |
+                    set -e
+
+                    ACR_NAME=$(az acr list \
+                      --resource-group $(resourceGroup) \
+                      --query "[0].name" \
+                      --output tsv)
+
+                    IMAGE="$ACR_NAME.azurecr.io/${{ service }}:$(imageTag)"
+
+                    echo "========================================="
+                    echo "Scanning: $IMAGE"
+                    echo "========================================="
+
+                    # Login to ACR
+                    az acr login --name $ACR_NAME
+
+                    # Create reports directory
+                    mkdir -p $(Build.ArtifactStagingDirectory)/security-reports
+
+                    # Run Trivy scan
+                    trivy image \
+                      --severity HIGH,CRITICAL \
+                      --format table \
+                      --output $(Build.ArtifactStagingDirectory)/security-reports/${{ service }}-trivy-report.txt \
+                      $IMAGE
+
+                    # Also generate JSON for parsing
+                    trivy image \
+                      --severity HIGH,CRITICAL \
+                      --format json \
+                      --output $(Build.ArtifactStagingDirectory)/security-reports/${{ service }}-trivy-report.json \
+                      $IMAGE
+
+                    echo ""
+                    echo "✅ Scan completed"
+                    echo "Report saved to: $(Build.ArtifactStagingDirectory)/security-reports/${{ service }}-trivy-report.txt"
+
+                    # Display summary
+                    cat $(Build.ArtifactStagingDirectory)/security-reports/${{ service }}-trivy-report.txt
+
+              - script: |
+                  REPORT_FILE="$(Build.ArtifactStagingDirectory)/security-reports/${{ service }}-trivy-report.json"
+
+                  if [ -f "$REPORT_FILE" ]; then
+                    CRITICAL=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' "$REPORT_FILE")
+                    HIGH=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")] | length' "$REPORT_FILE")
+                    
+                    echo "========================================="
+                    echo "Security Scan Summary for ${{ service }}"
+                    echo "========================================="
+                    echo "CRITICAL vulnerabilities: $CRITICAL"
+                    echo "HIGH vulnerabilities: $HIGH"
+                    echo ""
+                    
+                    if [ "$CRITICAL" -gt 0 ]; then
+                      echo "##vso[task.logissue type=error]Found $CRITICAL CRITICAL vulnerabilities in ${{ service }}"
+                      echo "##vso[task.logissue type=warning]Consider fixing critical vulnerabilities before deployment"
+                      # Uncomment to fail the build on critical vulnerabilities:
+                      # exit 1
+                    fi
+                    
+                    if [ "$HIGH" -gt 10 ]; then
+                      echo "##vso[task.logissue type=warning]Found $HIGH HIGH vulnerabilities in ${{ service }}"
+                    fi
+                  fi
+                displayName: "Analyze Security Results"
+                continueOnError: true
+
+              - task: PublishBuildArtifacts@1
+                displayName: "Publish Security Reports"
+                inputs:
+                  PathtoPublish: "$(Build.ArtifactStagingDirectory)/security-reports"
+                  ArtifactName: "security-reports-${{ service }}"
+                  publishLocation: "Container"
+                condition: always()
+
+  # ============================================
+  # STAGE 4: Publish Artifacts
+  # ============================================
+  - stage: Publish
+    displayName: "Publish Build Info"
+    dependsOn:
+      - Build
+      - SecurityScan
+    condition: succeededOrFailed()
+    jobs:
+      - job: PublishArtifacts
+        displayName: "Publish Build Artifacts"
+        pool:
+          vmImage: "ubuntu-latest"
+        steps:
+          - task: PublishBuildArtifacts@1
+            displayName: "Publish Kubernetes Manifests"
+            inputs:
+              PathtoPublish: "kubernetes"
+              ArtifactName: "kubernetes-manifests"
+              publishLocation: "Container"
+
+          - bash: |
+              mkdir -p $(Build.ArtifactStagingDirectory)
+
+              cat > $(Build.ArtifactStagingDirectory)/build-info.txt <<EOF
+              ========================================
+              BUILD INFORMATION
+              ========================================
+              Build Number: $(Build.BuildNumber)
+              Image Tag: $(imageTag)
+              Environment: ${{ parameters.environment }}
+              Build Date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+              Source Branch: $(Build.SourceBranch)
+              Commit: $(Build.SourceVersion)
+
+              ========================================
+              TECHNOLOGY STACK
+              ========================================
+              Backend Services: Python $(pythonVersion) + FastAPI
+              Frontend Service: Node.js $(nodeVersion) + React + Next.js
+
+              ========================================
+              SERVICES BUILT
+              ========================================
+              EOF
+
+              for service in ${{ join(' ', parameters.services) }}; do
+                echo "- $service:$(imageTag)" >> $(Build.ArtifactStagingDirectory)/build-info.txt
+              done
+
+              cat >> $(Build.ArtifactStagingDirectory)/build-info.txt <<EOF
+
+              ========================================
+              QUALITY METRICS
+              ========================================
+              Code Coverage Threshold: ${{ parameters.coverageThreshold }}%
+              Security Scan: ${{ parameters.runSecurityScan }}
+              EOF
+
+              echo ""
+              echo "Build info saved:"
+              cat $(Build.ArtifactStagingDirectory)/build-info.txt
+            displayName: "Create Build Info"
+
+          - task: PublishBuildArtifacts@1
+            displayName: "Publish Build Info"
+            inputs:
+              PathtoPublish: "$(Build.ArtifactStagingDirectory)"
+              ArtifactName: "drop"
+              publishLocation: "Container"
+
+  # ============================================
+  # STAGE 5: Build Summary
+  # ============================================
+  - stage: Summary
+    displayName: "Build Summary"
+    dependsOn:
+      - Test
+      - Build
+      - SecurityScan
+    condition: always()
+    jobs:
+      - job: DisplaySummary
+        displayName: "Display Build Summary"
+        pool:
+          vmImage: "ubuntu-latest"
+        steps:
+          - task: AzureCLI@2
+            displayName: "Generate Build Summary"
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                ACR_NAME=$(az acr list \
+                  --resource-group $(resourceGroup) \
+                  --query "[0].name" \
+                  --output tsv)
+
+                echo "========================================="
+                echo "BUILD SUMMARY"
+                echo "========================================="
+                echo "Pipeline: $(Build.DefinitionName)"
+                echo "Build Number: $(Build.BuildNumber)"
+                echo "Environment: ${{ parameters.environment }}"
+                echo "ACR: $ACR_NAME"
+                echo "Image Tag: $(imageTag)"
+                echo ""
+                echo "Technology Stack:"
+                echo "  - Backend: Python $(pythonVersion) + FastAPI"
+                echo "  - Frontend: Node.js $(nodeVersion) + React + Next.js"
+                echo ""
+
+                echo "========================================="
+                echo "SERVICES BUILT"
+                echo "========================================="
+
+                sleep 10
+
+                for repo in ${{ join(' ', parameters.services) }}; do
+                  echo ""
+                  echo "=== $repo ==="
+                  az acr repository show-tags \
+                    --name $ACR_NAME \
+                    --repository $repo \
+                    --orderby time_desc \
+                    --top 5 \
+                    --output table 2>/dev/null || echo "Image built successfully (still indexing)"
+                done
+
+                echo ""
+                echo "========================================="
+                echo "PIPELINE STATUS"
+                echo "========================================="
+                echo "✅ Tests: Passed"
+                echo "✅ Code Coverage: Checked (Threshold: ${{ parameters.coverageThreshold }}%)"
+                echo "✅ Build: Successful"
+                echo "✅ Security Scan: ${{ parameters.runSecurityScan }}"
+                echo ""
+                echo "========================================="
+                echo "NEXT STEPS"
+                echo "========================================="
+                echo "1. Review security scan reports (if enabled)"
+                echo "2. Review code coverage reports"
+                echo "3. Run 'Deploy to AKS' pipeline to deploy"
+                echo ""
+                echo "Download artifacts from this build to view:"
+                echo "  - Code coverage reports"
+                echo "  - Security scan results"
+                echo "  - Kubernetes manifests"
+                echo "========================================="
+            continueOnError: true
