@@ -754,6 +754,7 @@ Use Istio for everything
 # 1. Install Linkerd CLI
 curl --proto '=https' --tlsv1.2 -sSfL https://run.linkerd.io/install | sh
 export PATH=$PATH:$HOME/.linkerd2/bin
+kubectl apply --server-side -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.0/standard-install.yaml
 
 # 2. Validate cluster
 linkerd check --pre
