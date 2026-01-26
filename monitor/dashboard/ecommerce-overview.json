@@ -1,0 +1,795 @@
+//kubernetes/monitoring/grafana-dashboards/ecommerce-overview.json
+{
+    "dashboard": {
+        "title": "E-Commerce Overview Dashboard",
+        "tags": [
+            "ecommerce",
+            "business-metrics"
+        ],
+        "timezone": "browser",
+        "editable": true,
+        "graphTooltip": 1,
+        "time": {
+            "from": "now-6h",
+            "to": "now"
+        },
+        "timepicker": {
+            "refresh_intervals": [
+                "5s",
+                "10s",
+                "30s",
+                "1m",
+                "5m",
+                "15m",
+                "30m",
+                "1h",
+                "2h",
+                "1d"
+            ]
+        },
+        "panels": [
+            {
+                "id": 1,
+                "title": "Total Requests (All Services)",
+                "type": "stat",
+                "gridPos": {
+                    "h": 4,
+                    "w": 6,
+                    "x": 0,
+                    "y": 0
+                },
+                "targets": [
+                    {
+                        "expr": "sum(rate(http_requests_total[5m])) * 300",
+                        "legendFormat": "Requests/5min",
+                        "refId": "A"
+                    }
+                ],
+                "options": {
+                    "colorMode": "value",
+                    "graphMode": "area",
+                    "orientation": "auto",
+                    "reduceOptions": {
+                        "calcs": [
+                            "lastNotNull"
+                        ]
+                    }
+                },
+                "fieldConfig": {
+                    "defaults": {
+                        "unit": "short",
+                        "thresholds": {
+                            "mode": "absolute",
+                            "steps": [
+                                {
+                                    "value": null,
+                                    "color": "green"
+                                },
+                                {
+                                    "value": 1000,
+                                    "color": "yellow"
+                                },
+                                {
+                                    "value": 5000,
+                                    "color": "red"
+                                }
+                            ]
+                        }
+                    }
+                }
+            },
+            {
+                "id": 2,
+                "title": "Active Users (Approx)",
+                "type": "stat",
+                "gridPos": {
+                    "h": 4,
+                    "w": 6,
+                    "x": 6,
+                    "y": 0
+                },
+                "targets": [
+                    {
+                        "expr": "sum(rate(user_sessions_created_total[5m])) * 300",
+                        "legendFormat": "Active Users",
+                        "refId": "A"
+                    }
+                ],
+                "options": {
+                    "colorMode": "value",
+                    "graphMode": "area",
+                    "orientation": "auto"
+                },
+                "fieldConfig": {
+                    "defaults": {
+                        "unit": "short",
+                        "thresholds": {
+                            "mode": "absolute",
+                            "steps": [
+                                {
+                                    "value": null,
+                                    "color": "green"
+                                },
+                                {
+                                    "value": 100,
+                                    "color": "yellow"
+                                },
+                                {
+                                    "value": 500,
+                                    "color": "orange"
+                                }
+                            ]
+                        }
+                    }
+                }
+            },
+            {
+                "id": 3,
+                "title": "Error Rate (%)",
+                "type": "stat",
+                "gridPos": {
+                    "h": 4,
+                    "w": 6,
+                    "x": 12,
+                    "y": 0
+                },
+                "targets": [
+                    {
+                        "expr": "(sum(rate(http_requests_total{status=~\"5..\"}[5m])) / sum(rate(http_requests_total[5m]))) * 100",
+                        "legendFormat": "Error Rate",
+                        "refId": "A"
+                    }
+                ],
+                "options": {
+                    "colorMode": "value",
+                    "graphMode": "area",
+                    "orientation": "auto"
+                },
+                "fieldConfig": {
+                    "defaults": {
+                        "unit": "percent",
+                        "thresholds": {
+                            "mode": "absolute",
+                            "steps": [
+                                {
+                                    "value": null,
+                                    "color": "green"
+                                },
+                                {
+                                    "value": 1,
+                                    "color": "yellow"
+                                },
+                                {
+                                    "value": 5,
+                                    "color": "red"
+                                }
+                            ]
+                        }
+                    }
+                }
+            },
+            {
+                "id": 4,
+                "title": "Average Response Time",
+                "type": "stat",
+                "gridPos": {
+                    "h": 4,
+                    "w": 6,
+                    "x": 18,
+                    "y": 0
+                },
+                "targets": [
+                    {
+                        "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) * 1000",
+                        "legendFormat": "95th Percentile",
+                        "refId": "A"
+                    }
+                ],
+                "options": {
+                    "colorMode": "value",
+                    "graphMode": "area",
+                    "orientation": "auto"
+                },
+                "fieldConfig": {
+                    "defaults": {
+                        "unit": "ms",
+                        "thresholds": {
+                            "mode": "absolute",
+                            "steps": [
+                                {
+                                    "value": null,
+                                    "color": "green"
+                                },
+                                {
+                                    "value": 1000,
+                                    "color": "yellow"
+                                },
+                                {
+                                    "value": 3000,
+                                    "color": "red"
+                                }
+                            ]
+                        }
+                    }
+                }
+            },
+            {
+                "id": 5,
+                "title": "Request Rate by Service",
+                "type": "graph",
+                "gridPos": {
+                    "h": 8,
+                    "w": 12,
+                    "x": 0,
+                    "y": 4
+                },
+                "targets": [
+                    {
+                        "expr": "sum(rate(http_requests_total{job=\"product-service\"}[5m])) by (job)",
+                        "legendFormat": "Product Service",
+                        "refId": "A"
+                    },
+                    {
+                        "expr": "sum(rate(http_requests_total{job=\"user-service\"}[5m])) by (job)",
+                        "legendFormat": "User Service",
+                        "refId": "B"
+                    },
+                    {
+                        "expr": "sum(rate(http_requests_total{job=\"frontend-service\"}[5m])) by (job)",
+                        "legendFormat": "Frontend Service",
+                        "refId": "C"
+                    }
+                ],
+                "yaxes": [
+                    {
+                        "format": "reqps",
+                        "label": "Requests/sec"
+                    },
+                    {
+                        "format": "short"
+                    }
+                ],
+                "xaxis": {
+                    "mode": "time"
+                }
+            },
+            {
+                "id": 6,
+                "title": "Response Time Percentiles",
+                "type": "graph",
+                "gridPos": {
+                    "h": 8,
+                    "w": 12,
+                    "x": 12,
+                    "y": 4
+                },
+                "targets": [
+                    {
+                        "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) * 1000",
+                        "legendFormat": "p50",
+                        "refId": "A"
+                    },
+                    {
+                        "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) * 1000",
+                        "legendFormat": "p95",
+                        "refId": "B"
+                    },
+                    {
+                        "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) * 1000",
+                        "legendFormat": "p99",
+                        "refId": "C"
+                    }
+                ],
+                "yaxes": [
+                    {
+                        "format": "ms",
+                        "label": "Response Time"
+                    },
+                    {
+                        "format": "short"
+                    }
+                ]
+            },
+            {
+                "id": 7,
+                "title": "Product Service Metrics",
+                "type": "row",
+                "gridPos": {
+                    "h": 1,
+                    "w": 24,
+                    "x": 0,
+                    "y": 12
+                },
+                "collapsed": false
+            },
+            {
+                "id": 8,
+                "title": "Product Views",
+                "type": "graph",
+                "gridPos": {
+                    "h": 6,
+                    "w": 8,
+                    "x": 0,
+                    "y": 13
+                },
+                "targets": [
+                    {
+                        "expr": "sum(rate(product_views_total[5m]))",
+                        "legendFormat": "Views/sec",
+                        "refId": "A"
+                    }
+                ],
+                "yaxes": [
+                    {
+                        "format": "ops",
+                        "label": "Views/sec"
+                    },
+                    {
+                        "format": "short"
+                    }
+                ]
+            },
+            {
+                "id": 9,
+                "title": "Products Added to Cart",
+                "type": "graph",
+                "gridPos": {
+                    "h": 6,
+                    "w": 8,
+                    "x": 8,
+                    "y": 13
+                },
+                "targets": [
+                    {
+                        "expr": "sum(rate(products_added_to_cart_total[5m]))",
+                        "legendFormat": "Add to Cart/sec",
+                        "refId": "A"
+                    }
+                ],
+                "yaxes": [
+                    {
+                        "format": "ops",
+                        "label": "Operations/sec"
+                    },
+                    {
+                        "format": "short"
+                    }
+                ]
+            },
+            {
+                "id": 10,
+                "title": "Product Search Queries",
+                "type": "graph",
+                "gridPos": {
+                    "h": 6,
+                    "w": 8,
+                    "x": 16,
+                    "y": 13
+                },
+                "targets": [
+                    {
+                        "expr": "sum(rate(product_search_queries_total[5m]))",
+                        "legendFormat": "Searches/sec",
+                        "refId": "A"
+                    }
+                ],
+                "yaxes": [
+                    {
+                        "format": "ops",
+                        "label": "Queries/sec"
+                    },
+                    {
+                        "format": "short"
+                    }
+                ]
+            },
+            {
+                "id": 11,
+                "title": "User Service Metrics",
+                "type": "row",
+                "gridPos": {
+                    "h": 1,
+                    "w": 24,
+                    "x": 0,
+                    "y": 19
+                },
+                "collapsed": false
+            },
+            {
+                "id": 12,
+                "title": "User Registrations",
+                "type": "graph",
+                "gridPos": {
+                    "h": 6,
+                    "w": 8,
+                    "x": 0,
+                    "y": 20
+                },
+                "targets": [
+                    {
+                        "expr": "sum(rate(user_registrations_total[5m]))",
+                        "legendFormat": "Registrations/sec",
+                        "refId": "A"
+                    }
+                ],
+                "yaxes": [
+                    {
+                        "format": "ops",
+                        "label": "Registrations/sec"
+                    },
+                    {
+                        "format": "short"
+                    }
+                ]
+            },
+            {
+                "id": 13,
+                "title": "User Logins (Success vs Failed)",
+                "type": "graph",
+                "gridPos": {
+                    "h": 6,
+                    "w": 8,
+                    "x": 8,
+                    "y": 20
+                },
+                "targets": [
+                    {
+                        "expr": "sum(rate(user_login_attempts_total{status=\"success\"}[5m]))",
+                        "legendFormat": "Successful Logins",
+                        "refId": "A"
+                    },
+                    {
+                        "expr": "sum(rate(user_login_attempts_total{status=\"failed\"}[5m]))",
+                        "legendFormat": "Failed Logins",
+                        "refId": "B"
+                    }
+                ],
+                "yaxes": [
+                    {
+                        "format": "ops",
+                        "label": "Logins/sec"
+                    },
+                    {
+                        "format": "short"
+                    }
+                ]
+            },
+            {
+                "id": 14,
+                "title": "Active Sessions",
+                "type": "graph",
+                "gridPos": {
+                    "h": 6,
+                    "w": 8,
+                    "x": 16,
+                    "y": 20
+                },
+                "targets": [
+                    {
+                        "expr": "sum(user_active_sessions)",
+                        "legendFormat": "Active Sessions",
+                        "refId": "A"
+                    }
+                ],
+                "yaxes": [
+                    {
+                        "format": "short",
+                        "label": "Sessions"
+                    },
+                    {
+                        "format": "short"
+                    }
+                ]
+            },
+            {
+                "id": 15,
+                "title": "Database & Cache Metrics",
+                "type": "row",
+                "gridPos": {
+                    "h": 1,
+                    "w": 24,
+                    "x": 0,
+                    "y": 26
+                },
+                "collapsed": false
+            },
+            {
+                "id": 16,
+                "title": "Database Query Duration",
+                "type": "graph",
+                "gridPos": {
+                    "h": 6,
+                    "w": 12,
+                    "x": 0,
+                    "y": 27
+                },
+                "targets": [
+                    {
+                        "expr": "histogram_quantile(0.95, sum(rate(database_query_duration_seconds_bucket[5m])) by (le, operation)) * 1000",
+                        "legendFormat": "{{operation}} - p95",
+                        "refId": "A"
+                    }
+                ],
+                "yaxes": [
+                    {
+                        "format": "ms",
+                        "label": "Query Time"
+                    },
+                    {
+                        "format": "short"
+                    }
+                ]
+            },
+            {
+                "id": 17,
+                "title": "Database Connection Pool",
+                "type": "graph",
+                "gridPos": {
+                    "h": 6,
+                    "w": 12,
+                    "x": 12,
+                    "y": 27
+                },
+                "targets": [
+                    {
+                        "expr": "sum(database_connections_active)",
+                        "legendFormat": "Active Connections",
+                        "refId": "A"
+                    },
+                    {
+                        "expr": "sum(database_connections_idle)",
+                        "legendFormat": "Idle Connections",
+                        "refId": "B"
+                    },
+                    {
+                        "expr": "sum(database_connections_max)",
+                        "legendFormat": "Max Connections",
+                        "refId": "C"
+                    }
+                ],
+                "yaxes": [
+                    {
+                        "format": "short",
+                        "label": "Connections"
+                    },
+                    {
+                        "format": "short"
+                    }
+                ]
+            },
+            {
+                "id": 18,
+                "title": "Redis Cache Hit Rate",
+                "type": "gauge",
+                "gridPos": {
+                    "h": 6,
+                    "w": 12,
+                    "x": 0,
+                    "y": 33
+                },
+                "targets": [
+                    {
+                        "expr": "(sum(rate(redis_cache_hits_total[5m])) / (sum(rate(redis_cache_hits_total[5m])) + sum(rate(redis_cache_misses_total[5m])))) * 100",
+                        "legendFormat": "Cache Hit Rate",
+                        "refId": "A"
+                    }
+                ],
+                "fieldConfig": {
+                    "defaults": {
+                        "unit": "percent",
+                        "min": 0,
+                        "max": 100,
+                        "thresholds": {
+                            "mode": "absolute",
+                            "steps": [
+                                {
+                                    "value": null,
+                                    "color": "red"
+                                },
+                                {
+                                    "value": 70,
+                                    "color": "yellow"
+                                },
+                                {
+                                    "value": 90,
+                                    "color": "green"
+                                }
+                            ]
+                        }
+                    }
+                }
+            },
+            {
+                "id": 19,
+                "title": "Cache Operations",
+                "type": "graph",
+                "gridPos": {
+                    "h": 6,
+                    "w": 12,
+                    "x": 12,
+                    "y": 33
+                },
+                "targets": [
+                    {
+                        "expr": "sum(rate(redis_cache_hits_total[5m]))",
+                        "legendFormat": "Hits/sec",
+                        "refId": "A"
+                    },
+                    {
+                        "expr": "sum(rate(redis_cache_misses_total[5m]))",
+                        "legendFormat": "Misses/sec",
+                        "refId": "B"
+                    },
+                    {
+                        "expr": "sum(rate(redis_operations_total{operation=\"set\"}[5m]))",
+                        "legendFormat": "Sets/sec",
+                        "refId": "C"
+                    }
+                ],
+                "yaxes": [
+                    {
+                        "format": "ops",
+                        "label": "Operations/sec"
+                    },
+                    {
+                        "format": "short"
+                    }
+                ]
+            },
+            {
+                "id": 20,
+                "title": "Business KPIs",
+                "type": "row",
+                "gridPos": {
+                    "h": 1,
+                    "w": 24,
+                    "x": 0,
+                    "y": 39
+                },
+                "collapsed": false
+            },
+            {
+                "id": 21,
+                "title": "Conversion Funnel",
+                "type": "bargauge",
+                "gridPos": {
+                    "h": 8,
+                    "w": 12,
+                    "x": 0,
+                    "y": 40
+                },
+                "targets": [
+                    {
+                        "expr": "sum(increase(product_views_total[1h]))",
+                        "legendFormat": "Product Views",
+                        "refId": "A"
+                    },
+                    {
+                        "expr": "sum(increase(products_added_to_cart_total[1h]))",
+                        "legendFormat": "Added to Cart",
+                        "refId": "B"
+                    },
+                    {
+                        "expr": "sum(increase(checkout_initiated_total[1h]))",
+                        "legendFormat": "Checkout Started",
+                        "refId": "C"
+                    },
+                    {
+                        "expr": "sum(increase(orders_completed_total[1h]))",
+                        "legendFormat": "Orders Completed",
+                        "refId": "D"
+                    }
+                ],
+                "options": {
+                    "orientation": "horizontal",
+                    "displayMode": "gradient"
+                },
+                "fieldConfig": {
+                    "defaults": {
+                        "unit": "short"
+                    }
+                }
+            },
+            {
+                "id": 22,
+                "title": "Revenue Metrics (Last Hour)",
+                "type": "stat",
+                "gridPos": {
+                    "h": 8,
+                    "w": 12,
+                    "x": 12,
+                    "y": 40
+                },
+                "targets": [
+                    {
+                        "expr": "sum(increase(order_total_revenue[1h]))",
+                        "legendFormat": "Total Revenue",
+                        "refId": "A"
+                    },
+                    {
+                        "expr": "sum(increase(order_total_revenue[1h])) / sum(increase(orders_completed_total[1h]))",
+                        "legendFormat": "Average Order Value",
+                        "refId": "B"
+                    }
+                ],
+                "options": {
+                    "colorMode": "value",
+                    "graphMode": "area",
+                    "orientation": "vertical"
+                },
+                "fieldConfig": {
+                    "defaults": {
+                        "unit": "currencyUSD"
+                    }
+                }
+            },
+            {
+                "id": 23,
+                "title": "Top Products (Last Hour)",
+                "type": "table",
+                "gridPos": {
+                    "h": 8,
+                    "w": 12,
+                    "x": 0,
+                    "y": 48
+                },
+                "targets": [
+                    {
+                        "expr": "topk(10, sum(increase(product_views_total[1h])) by (product_id, product_name))",
+                        "format": "table",
+                        "instant": true,
+                        "refId": "A"
+                    }
+                ],
+                "transformations": [
+                    {
+                        "id": "organize",
+                        "options": {
+                            "excludeByName": {
+                                "Time": true
+                            },
+                            "renameByName": {
+                                "product_id": "Product ID",
+                                "product_name": "Product Name",
+                                "Value": "Views"
+                            }
+                        }
+                    }
+                ]
+            },
+            {
+                "id": 24,
+                "title": "Failed Transactions",
+                "type": "table",
+                "gridPos": {
+                    "h": 8,
+                    "w": 12,
+                    "x": 12,
+                    "y": 48
+                },
+                "targets": [
+                    {
+                        "expr": "sum(increase(checkout_failed_total[1h])) by (reason)",
+                        "format": "table",
+                        "instant": true,
+                        "refId": "A"
+                    }
+                ],
+                "transformations": [
+                    {
+                        "id": "organize",
+                        "options": {
+                            "excludeByName": {
+                                "Time": true
+                            },
+                            "renameByName": {
+                                "reason": "Failure Reason",
+                                "Value": "Count"
+                            }
+                        }
+                    }
+                ]
+            }
+        ]
+    }
+}

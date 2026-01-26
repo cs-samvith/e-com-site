@@ -1,0 +1,93 @@
+# ConfigMap to auto-provision the e-commerce dashboard in Grafana
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards-ecommerce
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  ecommerce-overview.json: |
+    {
+      "dashboard": {
+        "title": "E-Commerce Overview Dashboard",
+        "tags": ["ecommerce", "business-metrics"],
+        "timezone": "browser",
+        "editable": true,
+        "graphTooltip": 1,
+        "time": {
+          "from": "now-6h",
+          "to": "now"
+        },
+        "panels": [
+          {
+            "id": 1,
+            "title": "Total Requests (All Services)",
+            "type": "stat",
+            "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+            "targets": [
+              {
+                "expr": "sum(rate(http_requests_total[5m])) * 300",
+                "legendFormat": "Requests/5min"
+              }
+            ],
+            "options": {
+              "colorMode": "value",
+              "graphMode": "area"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "short",
+                "thresholds": {
+                  "steps": [
+                    {"value": 0, "color": "green"},
+                    {"value": 1000, "color": "yellow"},
+                    {"value": 5000, "color": "red"}
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+---
+# Update Grafana Deployment to mount dashboards
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: monitoring
+spec:
+  template:
+    spec:
+      containers:
+        - name: grafana
+          volumeMounts:
+            - name: dashboards-ecommerce
+              mountPath: /etc/grafana/provisioning/dashboards/ecommerce
+      volumes:
+        - name: dashboards-ecommerce
+          configMap:
+            name: grafana-dashboards-ecommerce
+---
+# Dashboard provisioning configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-provider
+  namespace: monitoring
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: 'E-Commerce Dashboards'
+        orgId: 1
+        folder: 'E-Commerce'
+        type: file
+        disableDeletion: false
+        editable: true
+        updateIntervalSeconds: 10
+        allowUiUpdates: true
+        options:
+          path: /etc/grafana/provisioning/dashboards/ecommerce
